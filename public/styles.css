@@ -40,7 +40,10 @@ body {
   gap: 10px;
 }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.brand h1 { font-size: 15px; margin: 0; letter-spacing: -.2px; font-weight: 600; white-space: nowrap; }
+.brand h1 { font-size: 15px; margin: 0; letter-spacing: -.2px; font-weight: 600; white-space: nowrap; cursor: pointer; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; }
+.brand h1:hover { color: var(--highlight); }
+#btn-rename { width: 28px; height: 28px; border-style: dashed; opacity: .7; }
+#btn-rename:hover { opacity: 1; }
 .logo {
   width: 30px; height: 30px; border-radius: 8px;
   background: var(--accent);

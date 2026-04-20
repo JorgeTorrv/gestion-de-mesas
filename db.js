@@ -7,7 +7,7 @@ const dataDir = process.env.DATA_DIR || join(__dirname, 'data');
 if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
 const dbFile = join(dataDir, 'mesas.json');
 
-let data = { tables: [], guests: [], seq: { table: 0, guest: 0 } };
+let data = { tables: [], guests: [], seq: { table: 0, guest: 0 }, settings: { event_name: '' } };
 
 function load() {
   if (existsSync(dbFile)) {
@@ -20,7 +20,10 @@ function load() {
         seq: parsed.seq || {
           table: Math.max(0, ...(parsed.tables || []).map(t => t.id)),
           guest: Math.max(0, ...(parsed.guests || []).map(g => g.id))
-        }
+        },
+        settings: parsed.settings && typeof parsed.settings === 'object'
+          ? { event_name: String(parsed.settings.event_name || '') }
+          : { event_name: '' }
       };
       // Backward-compat: ensure confirmed field exists on older records
       for (const g of data.guests) if (g.confirmed === undefined) g.confirmed = 0;
@@ -194,14 +197,28 @@ export const queries = {
     data.tables = [];
     data.guests = [];
     data.seq = { table: 0, guest: 0 };
+    data.settings = { event_name: '' };
     save();
+  },
+  getSettings: {
+    get: () => ({ ...data.settings })
+  },
+  updateSettings: {
+    run: (patch) => {
+      if (patch && typeof patch === 'object') {
+        if ('event_name' in patch) data.settings.event_name = String(patch.event_name || '');
+      }
+      save();
+      return { ...data.settings };
+    }
   },
   exportAll: () => ({
     version: 1,
     exported_at: nowISO(),
     tables: data.tables,
     guests: data.guests,
-    seq: data.seq
+    seq: data.seq,
+    settings: data.settings
   }),
   replaceAll: (payload) => {
     if (!payload || !Array.isArray(payload.tables) || !Array.isArray(payload.guests)) {
@@ -234,6 +251,9 @@ export const queries = {
       table: Math.max(0, ...data.tables.map(t => t.id)),
       guest: Math.max(0, ...data.guests.map(g => g.id))
     };
+    data.settings = payload.settings && typeof payload.settings === 'object'
+      ? { event_name: String(payload.settings.event_name || '') }
+      : { event_name: '' };
     persist();
   }
 };

@@ -13,8 +13,10 @@ const state = {
   dragActive: false,
   dragTick: null,
   canvasW: 2000,
-  canvasH: 1400
+  canvasH: 1400,
+  settings: { event_name: '' }
 };
+const DEFAULT_TITLE = 'Gestion de Mesas';
 const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 1.8;
 const ZOOM_STEP = 0.1;
@@ -63,7 +65,31 @@ async function refresh() {
   const data = await api.getState();
   state.tables = data.tables;
   state.guests = data.guests;
+  state.settings = data.settings || { event_name: '' };
+  applyEventName();
   render();
+}
+
+function applyEventName() {
+  const name = (state.settings.event_name || '').trim();
+  const display = name || DEFAULT_TITLE;
+  $('#app-title').textContent = display;
+  document.title = name ? `${name} — Mesas` : DEFAULT_TITLE;
+}
+
+async function renameEvent() {
+  const current = state.settings.event_name || '';
+  const v = prompt('Nombre del evento (vacio para usar el por defecto):', current);
+  if (v === null) return;
+  const name = v.trim();
+  state.settings.event_name = name;
+  applyEventName();
+  await fetch('/api/settings', {
+    method: 'PUT',
+    headers: json(),
+    body: JSON.stringify({ event_name: name })
+  });
+  toast(name ? 'Nombre actualizado' : 'Nombre restablecido', 'success');
 }
 
 function render() {
@@ -1186,6 +1212,10 @@ $$('.modal').forEach(m => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') $$('.modal').forEach(m => m.classList.add('hidden'));
 });
+
+// ============ RENAME EVENT ============
+$('#app-title').addEventListener('click', renameEvent);
+$('#btn-rename').addEventListener('click', renameEvent);
 
 // ============ BOOT ============
 setupZoomControls();

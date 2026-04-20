@@ -24,7 +24,13 @@ function enrichTable(t) {
 app.get('/api/state', (req, res) => {
   const tables = queries.listTables.all().map(enrichTable);
   const guests = queries.listGuests.all();
-  res.json({ tables, guests });
+  const settings = queries.getSettings.get();
+  res.json({ tables, guests, settings });
+});
+
+app.put('/api/settings', (req, res) => {
+  const updated = queries.updateSettings.run(req.body || {});
+  res.json(updated);
 });
 
 app.post('/api/tables', (req, res) => {
