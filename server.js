@@ -93,9 +93,10 @@ app.post('/api/guests/bulk', (req, res) => {
   const insert = transaction((items) => {
     const ids = [];
     for (const g of items) {
-      if (!g?.name || !String(g.name).trim()) continue;
+      const name = String(g?.name || '').trim();
+      if (!name) continue;
       const info = queries.createGuest.run(
-        String(g.name).trim(),
+        name,
         g.phone || null,
         g.email || null,
         g.extra_info || null,
@@ -103,12 +104,40 @@ app.post('/api/guests/bulk', (req, res) => {
         null,
         0
       );
-      ids.push(info.lastInsertRowid);
+      const parentId = info.lastInsertRowid;
+      ids.push(parentId);
+      const size = Math.max(1, Math.min(20, Number(g.group_size) || 1));
+      for (let i = 1; i < size; i++) {
+        const p = queries.createGuest.run(
+          `${name} (+${i})`,
+          null, null, null,
+          null, parentId, 1, 0
+        );
+        ids.push(p.lastInsertRowid);
+      }
     }
     return ids;
   });
   const ids = insert(rows);
   res.json({ inserted: ids.length });
+});
+
+app.post('/api/tables/bulk', (req, res) => {
+  const tables = Array.isArray(req.body?.tables) ? req.body.tables : [];
+  if (!tables.length) return res.status(400).json({ error: 'Lista vacia' });
+  let created = 0;
+  for (const t of tables) {
+    const name = String(t?.name || '').trim();
+    if (!name) continue;
+    queries.createTable.run(
+      name,
+      Number(t.position_x) || 0,
+      Number(t.position_y) || 0,
+      Number(t.capacity) || 10
+    );
+    created++;
+  }
+  res.json({ created });
 });
 
 app.put('/api/guests/:id', (req, res) => {

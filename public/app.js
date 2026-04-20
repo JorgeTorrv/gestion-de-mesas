@@ -966,26 +966,53 @@ $('#ng-save').addEventListener('click', async () => {
   refresh();
 });
 
+function getNextTableNumber() {
+  let max = 0;
+  state.tables.forEach(t => {
+    const m = /^mesa\s+(\d+)$/i.exec(t.name || '');
+    if (m) max = Math.max(max, Number(m[1]));
+  });
+  return max + 1;
+}
+
 $('#btn-new-table').addEventListener('click', () => {
-  $('#nt-name').value = `Mesa ${state.tables.length + 1}`;
+  $('#nt-name').value = `Mesa ${getNextTableNumber()}`;
   $('#nt-capacity').value = 10;
+  $('#nt-count').value = 1;
   openModal('#modal-new-table');
 });
 $('#nt-save').addEventListener('click', async () => {
-  const name = $('#nt-name').value.trim();
-  if (!name) { toast('Nombre requerido', 'error'); return; }
-  const idx = state.tables.length;
+  const count = Math.max(1, Math.min(50, Number($('#nt-count').value) || 1));
+  const capacity = Number($('#nt-capacity').value) || 10;
   const cols = 4;
-  const pos_x = 80 + (idx % cols) * 280;
-  const pos_y = 80 + Math.floor(idx / cols) * 280;
-  await api.createTable({
-    name,
-    position_x: pos_x,
-    position_y: pos_y,
-    capacity: Number($('#nt-capacity').value) || 10
-  });
+  const startIdx = state.tables.length;
+  const tables = [];
+
+  if (count === 1) {
+    const name = $('#nt-name').value.trim();
+    if (!name) { toast('Nombre requerido', 'error'); return; }
+    tables.push({
+      name,
+      position_x: 80 + (startIdx % cols) * 280,
+      position_y: 80 + Math.floor(startIdx / cols) * 280,
+      capacity
+    });
+  } else {
+    const startNum = getNextTableNumber();
+    for (let i = 0; i < count; i++) {
+      const idx = startIdx + i;
+      tables.push({
+        name: `Mesa ${startNum + i}`,
+        position_x: 80 + (idx % cols) * 280,
+        position_y: 80 + Math.floor(idx / cols) * 280,
+        capacity
+      });
+    }
+  }
+
+  await fetch('/api/tables/bulk', { method: 'POST', headers: json(), body: JSON.stringify({ tables }) });
   closeModal('#modal-new-table');
-  toast('Mesa creada', 'success');
+  toast(count === 1 ? 'Mesa creada' : `${count} mesas creadas`, 'success');
   refresh();
 });
 
@@ -1077,15 +1104,18 @@ $('#excel-input').addEventListener('change', async (e) => {
   $('#imp-phone').innerHTML = optHtml(true);
   $('#imp-email').innerHTML = optHtml(true);
   $('#imp-extra').innerHTML = optHtml(true);
+  $('#imp-size').innerHTML = optHtml(true);
 
   const findIdx = (re) => headers.findIndex(h => re.test(String(h).toLowerCase()));
   const nameIdx = findIdx(/nombre|name|invitado/);
   const phoneIdx = findIdx(/tel|phone|celular|movil|whats/);
   const emailIdx = findIdx(/mail|correo|email/);
+  const sizeIdx = findIdx(/cantidad|personas|cant|tam|size|grupo|pax/);
   if (nameIdx >= 0) $('#imp-name').value = nameIdx;
   $('#imp-phone').value = phoneIdx >= 0 ? phoneIdx : -1;
   $('#imp-email').value = emailIdx >= 0 ? emailIdx : -1;
   $('#imp-extra').value = -1;
+  $('#imp-size').value = sizeIdx >= 0 ? sizeIdx : -1;
 
   $('#imp-thead').innerHTML = `<tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr>`;
   $('#imp-tbody').innerHTML = data.slice(0, 8).map(r =>
@@ -1102,14 +1132,22 @@ $('#imp-confirm').addEventListener('click', async () => {
   const pI = Number($('#imp-phone').value);
   const eI = Number($('#imp-email').value);
   const xI = Number($('#imp-extra').value);
+  const sI = Number($('#imp-size').value);
 
   if (nI < 0) { toast('Elige columna de nombre', 'error'); return; }
+
+  const parseSize = (v) => {
+    const n = parseInt(String(v ?? '').trim(), 10);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return Math.min(20, n);
+  };
 
   const payload = state.importRows.map(r => ({
     name: String(r[nI] ?? '').trim(),
     phone: pI >= 0 ? String(r[pI] ?? '').trim() || null : null,
     email: eI >= 0 ? String(r[eI] ?? '').trim() || null : null,
-    extra_info: xI >= 0 ? String(r[xI] ?? '').trim() || null : null
+    extra_info: xI >= 0 ? String(r[xI] ?? '').trim() || null : null,
+    group_size: sI >= 0 ? parseSize(r[sI]) : 1
   })).filter(g => g.name);
 
   if (!payload.length) { toast('Sin filas validas', 'error'); return; }

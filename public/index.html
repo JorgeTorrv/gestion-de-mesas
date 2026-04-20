@@ -183,7 +183,11 @@
     <h2>Nueva mesa</h2>
     <div class="modal-body">
       <div class="field"><label>Nombre *</label><input id="nt-name" placeholder="Ej. Mesa 1" /></div>
-      <div class="field"><label>Capacidad base</label><input id="nt-capacity" type="number" value="10" min="1" /></div>
+      <div class="field-row">
+        <div class="field"><label>Capacidad base</label><input id="nt-capacity" type="number" value="10" min="1" /></div>
+        <div class="field field-sm"><label>Cantidad</label><input id="nt-count" type="number" value="1" min="1" max="50" /></div>
+      </div>
+      <p class="hint">Si creas varias a la vez, se nombran automaticamente continuando la numeracion (Mesa N, N+1, ...).</p>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" data-close>Cancelar</button>
@@ -204,7 +208,9 @@
         <div class="field"><label>Telefono</label><select id="imp-phone"></select></div>
         <div class="field"><label>Email</label><select id="imp-email"></select></div>
         <div class="field"><label>Nota/Extra</label><select id="imp-extra"></select></div>
+        <div class="field"><label>Cantidad (x asientos)</label><select id="imp-size"></select></div>
       </div>
+      <p class="hint" style="margin-top:4px;">Si eliges "Cantidad", una celda como "Juan y Luis" con valor 2 crea 2 asientos juntos (invitado + 1 acompanante).</p>
       <div class="import-preview">
         <table><thead id="imp-thead"></thead><tbody id="imp-tbody"></tbody></table>
       </div>
