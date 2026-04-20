@@ -589,6 +589,41 @@ function setupZoomControls() {
   wrap.addEventListener('pointerup', endPinch);
   wrap.addEventListener('pointercancel', endPinch);
 
+  // Mouse/pen pan (hand drag). Touch already scrolls natively via touch-action.
+  let panning = null;
+  wrap.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch') return;
+    if (e.button !== 0) return;
+    if (e.target.closest('.table-node')) return;
+    if (e.target.closest('.zoom-controls')) return;
+    panning = {
+      id: e.pointerId,
+      startX: e.clientX, startY: e.clientY,
+      startSL: wrap.scrollLeft, startST: wrap.scrollTop,
+      moved: false
+    };
+    wrap.classList.add('is-panning');
+    try { wrap.setPointerCapture(e.pointerId); } catch {}
+  });
+  wrap.addEventListener('pointermove', (e) => {
+    if (!panning || e.pointerId !== panning.id) return;
+    const dx = e.clientX - panning.startX;
+    const dy = e.clientY - panning.startY;
+    if (!panning.moved && (Math.abs(dx) + Math.abs(dy) > 4)) panning.moved = true;
+    if (panning.moved) {
+      wrap.scrollLeft = panning.startSL - dx;
+      wrap.scrollTop = panning.startST - dy;
+    }
+  });
+  const endPan = (e) => {
+    if (!panning || e.pointerId !== panning.id) return;
+    try { wrap.releasePointerCapture(panning.id); } catch {}
+    panning = null;
+    wrap.classList.remove('is-panning');
+  };
+  wrap.addEventListener('pointerup', endPan);
+  wrap.addEventListener('pointercancel', endPan);
+
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;

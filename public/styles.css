@@ -217,7 +217,10 @@ body {
     var(--bg);
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x pan-y;
+  cursor: grab;
 }
+.canvas-wrap.is-panning { cursor: grabbing; }
+.canvas-wrap.is-panning * { cursor: grabbing !important; }
 .canvas-outer {
   position: relative;
   min-width: 100%; min-height: 100%;
