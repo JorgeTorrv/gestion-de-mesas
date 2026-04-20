@@ -234,7 +234,7 @@ body {
 /* Zoom controls */
 .zoom-controls {
   position: fixed;
-  bottom: 12px; left: 12px;
+  bottom: 12px; left: calc(320px + 12px);
   display: flex;
   gap: 1px;
   background: var(--surface);
@@ -532,6 +532,7 @@ body.sidebar-open .sidebar-backdrop { opacity: 1; pointer-events: auto; }
   .btn { padding: 7px 10px; }
   .btn .ico + .btn-label { display: none; }
   .icon-btn.only-mobile { display: none !important; }
+  .zoom-controls { left: calc(280px + 12px); }
 }
 
 /* Mobile */
