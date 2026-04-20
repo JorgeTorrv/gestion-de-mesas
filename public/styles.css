@@ -20,6 +20,33 @@
   --radius: 10px;
 }
 
+html[data-theme="dark"] {
+  --bg: #15171b;
+  --bg-2: #1c1f24;
+  --surface: #212429;
+  --surface-2: #262a30;
+  --border: #353a41;
+  --border-strong: #4a5059;
+  --text: #ebe9e2;
+  --text-2: #c7c4ba;
+  --muted: #8b8e95;
+  --accent: #ebe9e2;
+  --accent-2: #d0cdc3;
+  --highlight: #e0a849;
+  --highlight-soft: #3a2f1a;
+  --success: #6ea97d;
+  --danger: #d86a62;
+  --warning: #e0a849;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+  --shadow-lg: 0 4px 12px rgba(0,0,0,.4), 0 20px 48px rgba(0,0,0,.5);
+}
+html[data-theme="dark"] .logo { color: #15171b; }
+html[data-theme="dark"] .canvas-wrap {
+  background:
+    radial-gradient(circle, var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--bg);
+}
+
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; overscroll-behavior: none; }
 body {
@@ -61,6 +88,9 @@ body {
   cursor: pointer; color: var(--text);
 }
 .icon-btn:hover { background: var(--bg-2); }
+#btn-theme .icon-moon { display: none; }
+html[data-theme="dark"] #btn-theme .icon-sun { display: none; }
+html[data-theme="dark"] #btn-theme .icon-moon { display: inline; }
 
 /* Buttons */
 .btn {

@@ -1217,6 +1217,18 @@ document.addEventListener('keydown', (e) => {
 $('#app-title').addEventListener('click', renameEvent);
 $('#btn-rename').addEventListener('click', renameEvent);
 
+// ============ THEME TOGGLE ============
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', theme === 'dark' ? '#15171b' : '#faf9f5');
+  try { localStorage.setItem('theme', theme); } catch {}
+}
+$('#btn-theme').addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme') || 'light';
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+});
+
 // ============ BOOT ============
 setupZoomControls();
 refresh();
