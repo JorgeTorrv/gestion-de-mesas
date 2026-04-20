@@ -79,6 +79,7 @@ function renderCounts() {
   $('#count-total').textContent = total;
   $('#count-assigned').textContent = assigned;
   $('#count-unassigned').textContent = total - assigned;
+  $('#count-tables').textContent = state.tables.length;
 }
 
 // ============ GUEST LIST ============

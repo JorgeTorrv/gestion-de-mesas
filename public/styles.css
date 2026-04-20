@@ -99,7 +99,7 @@ body {
   border-bottom: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 10px;
 }
-.counts { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; }
+.counts { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; }
 .counts > div {
   background: var(--bg-2);
   border: 1px solid var(--border);
