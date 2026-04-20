@@ -216,12 +216,50 @@ body {
     radial-gradient(circle, var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
     var(--bg);
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+}
+.canvas-outer {
+  position: relative;
+  min-width: 100%; min-height: 100%;
+  width: 100%; height: 100%;
 }
 .canvas {
-  position: relative;
-  width: 3000px; height: 2000px;
-  min-width: 100%; min-height: 100%;
+  position: absolute;
+  top: 0; left: 0;
+  width: 2000px; height: 1400px;
+  transform-origin: 0 0;
+  will-change: transform;
 }
+
+/* Zoom controls */
+.zoom-controls {
+  position: fixed;
+  bottom: 12px; left: 12px;
+  display: flex;
+  gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  z-index: 15;
+}
+.zoom-btn {
+  background: var(--surface);
+  border: none;
+  padding: 7px 11px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .12s;
+  min-width: 34px;
+}
+.zoom-btn:hover { background: var(--bg-2); }
+.zoom-btn:active { background: var(--border); }
+.zoom-label { font-size: 12px; min-width: 52px; color: var(--muted); }
+.zoom-label:hover { color: var(--text); }
 .canvas-hint {
   position: fixed; bottom: 12px; right: 12px;
   background: var(--surface); border: 1px solid var(--border);
@@ -530,6 +568,13 @@ body.sidebar-open .sidebar-backdrop { opacity: 1; pointer-events: auto; }
   .modal-actions { position: sticky; bottom: 0; background: var(--surface); margin: 16px -16px -20px; padding: 14px 16px; }
   .child-row { grid-template-columns: 1fr; }
   .field-sm { max-width: 100%; flex: 1 1 100% !important; }
+}
+
+@media (max-width: 760px) {
+  .zoom-controls { bottom: 10px; left: 10px; }
+  .zoom-btn { padding: 9px 12px; min-width: 40px; font-size: 16px; }
+  .zoom-label { min-width: 56px; font-size: 12px; }
+  .canvas-hint { right: 10px; bottom: 64px; }
 }
 
 @media (max-width: 420px) {

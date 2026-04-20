@@ -8,8 +8,18 @@ const state = {
   currentTableId: null,
   pendingChildren: [],
   importRows: [],
-  importHeaders: []
+  importHeaders: [],
+  zoom: 1,
+  dragActive: false,
+  dragTick: null,
+  canvasW: 2000,
+  canvasH: 1400
 };
+const ZOOM_MIN = 0.3;
+const ZOOM_MAX = 1.8;
+const ZOOM_STEP = 0.1;
+let lastPointerClient = null;
+let edgeScrollRaf = null;
 
 // ============ API ============
 const api = {
@@ -146,10 +156,140 @@ function renderGuestList() {
   });
 }
 
+// ============ ZOOM / CANVAS SIZE / EDGE SCROLL ============
+function tableSize(t) {
+  const count = t.guests.length;
+  const cap = Math.max(count, Number(t.capacity) || 10);
+  return Math.max(140, Math.min(340, 140 + cap * 10));
+}
+
+function updateCanvasSize(extra) {
+  const wrap = $('.canvas-wrap');
+  const pad = 400;
+  let w = Math.ceil(wrap.clientWidth / state.zoom) + 100;
+  let h = Math.ceil(wrap.clientHeight / state.zoom) + 100;
+  state.tables.forEach(t => {
+    const s = tableSize(t);
+    w = Math.max(w, t.position_x + s + pad);
+    h = Math.max(h, t.position_y + s + pad + 40); // +40 for name label below
+  });
+  if (extra) {
+    w = Math.max(w, extra.x + pad);
+    h = Math.max(h, extra.y + pad);
+  }
+  state.canvasW = w;
+  state.canvasH = h;
+  $('#canvas').style.width = w + 'px';
+  $('#canvas').style.height = h + 'px';
+  applyZoomSize();
+}
+
+function applyZoomSize() {
+  $('#canvas').style.transform = `scale(${state.zoom})`;
+  const outer = $('#canvas-outer');
+  outer.style.width = (state.canvasW * state.zoom) + 'px';
+  outer.style.height = (state.canvasH * state.zoom) + 'px';
+  const label = $('#zoom-label');
+  if (label) label.textContent = Math.round(state.zoom * 100) + '%';
+}
+
+function setZoom(z, centerClientX, centerClientY) {
+  const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+  if (Math.abs(newZoom - state.zoom) < 0.001) return;
+  const wrap = $('.canvas-wrap');
+  if (centerClientX !== undefined && centerClientY !== undefined) {
+    const rect = wrap.getBoundingClientRect();
+    const cx = centerClientX - rect.left;
+    const cy = centerClientY - rect.top;
+    const canvasCx = (cx + wrap.scrollLeft) / state.zoom;
+    const canvasCy = (cy + wrap.scrollTop) / state.zoom;
+    state.zoom = newZoom;
+    applyZoomSize();
+    wrap.scrollLeft = canvasCx * newZoom - cx;
+    wrap.scrollTop = canvasCy * newZoom - cy;
+  } else {
+    // zoom toward current viewport center
+    const rect = wrap.getBoundingClientRect();
+    const cx = rect.width / 2, cy = rect.height / 2;
+    const canvasCx = (cx + wrap.scrollLeft) / state.zoom;
+    const canvasCy = (cy + wrap.scrollTop) / state.zoom;
+    state.zoom = newZoom;
+    applyZoomSize();
+    wrap.scrollLeft = canvasCx * newZoom - cx;
+    wrap.scrollTop = canvasCy * newZoom - cy;
+  }
+  updateCanvasSize();
+}
+
+function fitView() {
+  if (!state.tables.length) {
+    state.zoom = 1;
+    updateCanvasSize();
+    return;
+  }
+  const wrap = $('.canvas-wrap');
+  let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+  state.tables.forEach(t => {
+    const s = tableSize(t);
+    minX = Math.min(minX, t.position_x);
+    minY = Math.min(minY, t.position_y);
+    maxX = Math.max(maxX, t.position_x + s);
+    maxY = Math.max(maxY, t.position_y + s + 40);
+  });
+  const contentW = Math.max(1, maxX - minX + 120);
+  const contentH = Math.max(1, maxY - minY + 120);
+  const zX = (wrap.clientWidth - 40) / contentW;
+  const zY = (wrap.clientHeight - 40) / contentH;
+  state.zoom = Math.max(ZOOM_MIN, Math.min(1, Math.min(zX, zY)));
+  updateCanvasSize();
+  wrap.scrollLeft = (minX - 20) * state.zoom;
+  wrap.scrollTop = (minY - 20) * state.zoom;
+}
+
+function startEdgeScroll() {
+  if (edgeScrollRaf) return;
+  edgeScrollRaf = requestAnimationFrame(edgeScrollTick);
+}
+function edgeScrollTick() {
+  edgeScrollRaf = null;
+  if (!state.dragActive || !lastPointerClient) return;
+  const wrap = $('.canvas-wrap');
+  const rect = wrap.getBoundingClientRect();
+  const edge = 70;
+  const maxSpeed = 18;
+  const px = lastPointerClient.x, py = lastPointerClient.y;
+  let dx = 0, dy = 0;
+  if (px < rect.left + edge) dx = -maxSpeed * ((rect.left + edge - px) / edge);
+  else if (px > rect.right - edge) dx = maxSpeed * ((px - (rect.right - edge)) / edge);
+  if (py < rect.top + edge) dy = -maxSpeed * ((rect.top + edge - py) / edge);
+  else if (py > rect.bottom - edge) dy = maxSpeed * ((py - (rect.bottom - edge)) / edge);
+  if (dx || dy) {
+    const beforeL = wrap.scrollLeft, beforeT = wrap.scrollTop;
+    wrap.scrollLeft = beforeL + dx;
+    wrap.scrollTop = beforeT + dy;
+    // If we hit the max scroll, grow canvas so we can keep scrolling
+    if (dx > 0 && wrap.scrollLeft === beforeL) {
+      state.canvasW += dx * 4;
+      $('#canvas').style.width = state.canvasW + 'px';
+      applyZoomSize();
+      wrap.scrollLeft = beforeL + dx;
+    }
+    if (dy > 0 && wrap.scrollTop === beforeT) {
+      state.canvasH += dy * 4;
+      $('#canvas').style.height = state.canvasH + 'px';
+      applyZoomSize();
+      wrap.scrollTop = beforeT + dy;
+    }
+    if (state.dragTick) state.dragTick();
+  }
+  edgeScrollRaf = requestAnimationFrame(edgeScrollTick);
+}
+
 // ============ CANVAS ============
 function renderCanvas() {
   const canvas = $('#canvas');
   canvas.innerHTML = '';
+  updateCanvasSize();
 
   state.tables.forEach(t => {
     const count = t.guests.length;
@@ -212,6 +352,15 @@ function attachTableInteractions(node, table) {
 // ============ POINTER DRAG HELPER ============
 // Unified drag-or-click for both guest cards (drag-to-table) and table nodes (reposition)
 // Supports mouse + touch + pen via pointer events.
+function pointerToCanvas(clientX, clientY) {
+  const wrap = $('.canvas-wrap');
+  const rect = wrap.getBoundingClientRect();
+  return {
+    cx: (clientX - rect.left + wrap.scrollLeft) / state.zoom,
+    cy: (clientY - rect.top + wrap.scrollTop) / state.zoom
+  };
+}
+
 function enableDragOrClick(el, opts) {
   const { onClick, ghostLabel, onDrop, onPositionChange, moveTarget, skipOn } = opts;
   const isRepositionMode = !!onPositionChange;
@@ -221,6 +370,7 @@ function enableDragOrClick(el, opts) {
   let moved = false;
   let startX = 0, startY = 0;
   let origX = 0, origY = 0;
+  let offCanvasX = 0, offCanvasY = 0;
   let longPressTimer = null;
   let dragArmed = false;
   const threshold = 6;
@@ -229,19 +379,32 @@ function enableDragOrClick(el, opts) {
     $$('.table-node.over, .table-node.over-full').forEach(n => n.classList.remove('over','over-full'));
   };
 
+  const applyPosition = () => {
+    if (!lastPointerClient) return;
+    const { cx, cy } = pointerToCanvas(lastPointerClient.x, lastPointerClient.y);
+    const nx = Math.max(0, cx - offCanvasX);
+    const ny = Math.max(0, cy - offCanvasY);
+    moveTarget.style.left = nx + 'px';
+    moveTarget.style.top = ny + 'px';
+  };
+
   const onDown = (e) => {
     if (e.button !== undefined && e.button !== 0) return;
     if (skipOn && e.target.closest(skipOn)) return;
+    if (pinch.active) return; // two-finger pinch takes precedence
     pointerId = e.pointerId;
     started = true;
     moved = false;
-    dragArmed = !isRepositionMode && e.pointerType !== 'touch'; // mouse/pen drag is armed immediately
+    dragArmed = !isRepositionMode && e.pointerType !== 'touch';
     startX = e.clientX; startY = e.clientY;
+    lastPointerClient = { x: e.clientX, y: e.clientY };
     if (isRepositionMode) {
       origX = parseFloat(moveTarget.style.left) || 0;
       origY = parseFloat(moveTarget.style.top) || 0;
+      const { cx, cy } = pointerToCanvas(e.clientX, e.clientY);
+      offCanvasX = cx - origX;
+      offCanvasY = cy - origY;
     }
-    // For touch on guest cards: arm drag after long-press (300ms)
     if (!isRepositionMode && e.pointerType === 'touch') {
       longPressTimer = setTimeout(() => {
         dragArmed = true;
@@ -250,7 +413,6 @@ function enableDragOrClick(el, opts) {
         if (navigator.vibrate) navigator.vibrate(15);
       }, 280);
     }
-    // capture to keep receiving events when leaving the element
     try { el.setPointerCapture(pointerId); } catch {}
     window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', onUp, { passive: false });
@@ -259,16 +421,17 @@ function enableDragOrClick(el, opts) {
 
   const onMove = (e) => {
     if (!started) return;
+    if (pinch.active) { onCancel(); return; }
+    lastPointerClient = { x: e.clientX, y: e.clientY };
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
     const dist = Math.abs(dx) + Math.abs(dy);
 
     if (!moved && dist > threshold) moved = true;
 
-    // Cancel long-press if user starts scrolling before it fires
     if (longPressTimer && moved && !dragArmed) {
       clearTimeout(longPressTimer); longPressTimer = null;
-      started = false; // treat as scroll, bail
+      started = false;
       releaseCapture();
       return;
     }
@@ -276,15 +439,15 @@ function enableDragOrClick(el, opts) {
     if (!moved) return;
 
     if (isRepositionMode) {
-      // reposition the element (table)
       moveTarget.classList.add('drag-moving');
       e.preventDefault();
-      const nx = Math.max(0, origX + dx);
-      const ny = Math.max(0, origY + dy);
-      moveTarget.style.left = nx + 'px';
-      moveTarget.style.top = ny + 'px';
+      applyPosition();
+      if (!state.dragActive) {
+        state.dragActive = true;
+        state.dragTick = applyPosition;
+      }
+      startEdgeScroll();
     } else if (dragArmed) {
-      // drag a guest card
       e.preventDefault();
       el.classList.add('dragging');
       if ($('#drag-ghost').classList.contains('hidden')) {
@@ -326,6 +489,8 @@ function enableDragOrClick(el, opts) {
     const wasDragArmed = dragArmed;
     started = false;
     dragArmed = false;
+    state.dragActive = false;
+    state.dragTick = null;
 
     if (isRepositionMode) {
       moveTarget.classList.remove('drag-moving');
@@ -333,13 +498,13 @@ function enableDragOrClick(el, opts) {
         const fx = parseFloat(moveTarget.style.left) || 0;
         const fy = parseFloat(moveTarget.style.top) || 0;
         await onPositionChange?.(fx, fy);
+        updateCanvasSize();
       } else {
         onClick?.();
       }
       return;
     }
 
-    // Guest card
     el.classList.remove('dragging');
     hideGhost();
     document.body.classList.remove('is-dragging');
@@ -356,6 +521,8 @@ function enableDragOrClick(el, opts) {
     if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
     releaseCapture();
     started = false; moved = false; dragArmed = false;
+    state.dragActive = false;
+    state.dragTick = null;
     el.classList.remove('dragging');
     if (moveTarget) moveTarget.classList.remove('drag-moving');
     hideGhost();
@@ -364,6 +531,73 @@ function enableDragOrClick(el, opts) {
   };
 
   el.addEventListener('pointerdown', onDown);
+}
+
+// ============ ZOOM CONTROLS: wheel + buttons + pinch ============
+const pinch = { active: false, pointers: new Map(), startDist: 0, startZoom: 1 };
+
+function setupZoomControls() {
+  const wrap = $('.canvas-wrap');
+
+  // Ctrl+wheel zoom
+  wrap.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const delta = -e.deltaY;
+    const factor = delta > 0 ? 1.1 : 0.9;
+    setZoom(state.zoom * factor, e.clientX, e.clientY);
+  }, { passive: false });
+
+  // Buttons
+  $('#zoom-in').addEventListener('click', () => setZoom(state.zoom + ZOOM_STEP));
+  $('#zoom-out').addEventListener('click', () => setZoom(state.zoom - ZOOM_STEP));
+  $('#zoom-label').addEventListener('click', () => fitView());
+
+  // Touch pinch-zoom
+  wrap.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return;
+    pinch.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch.pointers.size === 2) {
+      const [a, b] = [...pinch.pointers.values()];
+      pinch.active = true;
+      pinch.startDist = Math.hypot(a.x - b.x, a.y - b.y);
+      pinch.startZoom = state.zoom;
+    }
+  });
+
+  wrap.addEventListener('pointermove', (e) => {
+    if (!pinch.pointers.has(e.pointerId)) return;
+    pinch.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch.active && pinch.pointers.size >= 2) {
+      const [a, b] = [...pinch.pointers.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch.startDist > 0) {
+        const ratio = dist / pinch.startDist;
+        const cx = (a.x + b.x) / 2;
+        const cy = (a.y + b.y) / 2;
+        setZoom(pinch.startZoom * ratio, cx, cy);
+      }
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  const endPinch = (e) => {
+    if (!pinch.pointers.has(e.pointerId)) return;
+    pinch.pointers.delete(e.pointerId);
+    if (pinch.pointers.size < 2) pinch.active = false;
+  };
+  wrap.addEventListener('pointerup', endPinch);
+  wrap.addEventListener('pointercancel', endPinch);
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom(state.zoom + ZOOM_STEP); }
+    else if (e.key === '-') { e.preventDefault(); setZoom(state.zoom - ZOOM_STEP); }
+    else if (e.key === '0') { e.preventDefault(); setZoom(1); }
+  });
+
+  window.addEventListener('resize', () => updateCanvasSize());
 }
 
 // Ghost helpers
@@ -880,4 +1114,5 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ============ BOOT ============
+setupZoomControls();
 refresh();

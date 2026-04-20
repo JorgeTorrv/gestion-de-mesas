@@ -66,10 +66,17 @@
   <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
 
   <section class="canvas-wrap">
-    <div id="canvas" class="canvas"></div>
+    <div id="canvas-outer" class="canvas-outer">
+      <div id="canvas" class="canvas"></div>
+    </div>
     <div class="canvas-hint">
-      <span class="only-desktop">Arrastra invitados desde la lista o haz click en una mesa. Arrastra las mesas para acomodar.</span>
+      <span class="only-desktop">Arrastra invitados desde la lista o haz click en una mesa. Ctrl+rueda para hacer zoom.</span>
       <span class="only-mobile">Toca una mesa para ver su gente. Toca un invitado para asignarlo.</span>
+    </div>
+    <div class="zoom-controls">
+      <button id="zoom-out" class="zoom-btn" title="Alejar (Ctrl+-)">−</button>
+      <button id="zoom-label" class="zoom-btn zoom-label" title="100% (click para ajustar a todas las mesas)">100%</button>
+      <button id="zoom-in" class="zoom-btn" title="Acercar (Ctrl++)">+</button>
     </div>
   </section>
 </main>
