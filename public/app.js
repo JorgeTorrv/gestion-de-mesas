@@ -22,6 +22,7 @@ const api = {
   async createGuestsBulk(rows) { return post('/api/guests/bulk', { guests: rows }); },
   async updateGuest(id, data) { return put(`/api/guests/${id}`, data); },
   async assignGuest(id, tableId) { return fetch(`/api/guests/${id}/assign`, { method: 'PATCH', headers: json(), body: JSON.stringify({ table_id: tableId }) }); },
+  async setConfirmed(id, confirmed) { return fetch(`/api/guests/${id}/confirm`, { method: 'PATCH', headers: json(), body: JSON.stringify({ confirmed: confirmed ? 1 : 0 }) }); },
   async deleteGuest(id) { return fetch(`/api/guests/${id}`, { method: 'DELETE' }); },
   async reset() { return post('/api/reset', {}); },
   async importPayload(payload) {
@@ -93,7 +94,10 @@ function renderGuestList() {
   list.innerHTML = items.map(g => {
     const table = g.table_id ? state.tables.find(t => t.id === g.table_id) : null;
     return `
-      <div class="guest-card ${g.is_plus_one ? 'is-plus-one' : ''}" data-guest-id="${g.id}">
+      <div class="guest-card ${g.is_plus_one ? 'is-plus-one' : ''} ${g.confirmed ? 'is-confirmed' : ''}" data-guest-id="${g.id}">
+        <button class="confirm-toggle ${g.confirmed ? 'on' : ''}" data-confirm="${g.id}" aria-pressed="${g.confirmed ? 'true' : 'false'}" title="${g.confirmed ? 'Confirmado' : 'Marcar confirmado'}">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </button>
         <div class="guest-main">
           <div class="guest-name">${esc(g.name)}</div>
           <div class="guest-meta">
@@ -113,6 +117,7 @@ function renderGuestList() {
     enableDragOrClick(el, {
       onClick: () => openGuestModal(id),
       ghostLabel: () => state.guests.find(x => x.id === id)?.name || '',
+      skipOn: '.confirm-toggle',
       onDrop: async (target) => {
         const tableEl = target.closest('.table-node');
         if (!tableEl) return;
@@ -122,6 +127,21 @@ function renderGuestList() {
         toast(`Asignado a ${t?.name || 'mesa'}`, 'success');
         await refresh();
       }
+    });
+  });
+
+  $$('.confirm-toggle', list).forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = Number(btn.dataset.confirm);
+      const g = state.guests.find(x => x.id === id);
+      if (!g) return;
+      const next = g.confirmed ? 0 : 1;
+      g.confirmed = next;
+      btn.classList.toggle('on', !!next);
+      btn.closest('.guest-card')?.classList.toggle('is-confirmed', !!next);
+      btn.setAttribute('aria-pressed', next ? 'true' : 'false');
+      await api.setConfirmed(id, next);
     });
   });
 }
@@ -193,7 +213,7 @@ function attachTableInteractions(node, table) {
 // Unified drag-or-click for both guest cards (drag-to-table) and table nodes (reposition)
 // Supports mouse + touch + pen via pointer events.
 function enableDragOrClick(el, opts) {
-  const { onClick, ghostLabel, onDrop, onPositionChange, moveTarget } = opts;
+  const { onClick, ghostLabel, onDrop, onPositionChange, moveTarget, skipOn } = opts;
   const isRepositionMode = !!onPositionChange;
 
   let pointerId = null;
@@ -211,6 +231,7 @@ function enableDragOrClick(el, opts) {
 
   const onDown = (e) => {
     if (e.button !== undefined && e.button !== 0) return;
+    if (skipOn && e.target.closest(skipOn)) return;
     pointerId = e.pointerId;
     started = true;
     moved = false;
@@ -375,6 +396,7 @@ function openGuestModal(id) {
   $('#mg-phone-input').value = g.phone || '';
   $('#mg-email-input').value = g.email || '';
   $('#mg-extra-input').value = g.extra_info || '';
+  $('#mg-confirmed-input').checked = !!g.confirmed;
 
   // Table selector
   const sel = $('#mg-table-select');
@@ -495,6 +517,11 @@ $('#mg-save').addEventListener('click', async () => {
     extra_info: $('#mg-extra-input').value.trim() || null
   });
 
+  const newConfirmed = $('#mg-confirmed-input').checked ? 1 : 0;
+  if (newConfirmed !== (parent.confirmed || 0)) {
+    await api.setConfirmed(id, newConfirmed);
+  }
+
   if (newTableId !== parent.table_id) {
     await api.assignGuest(id, newTableId);
   }
@@ -551,8 +578,11 @@ function renderTableMembers(t) {
     return;
   }
   host.innerHTML = t.guests.map(g => `
-    <div class="member-row" data-guest-id="${g.id}">
+    <div class="member-row ${g.confirmed ? 'is-confirmed' : ''}" data-guest-id="${g.id}">
       <div class="left">
+        <button class="confirm-toggle ${g.confirmed ? 'on' : ''}" data-confirm="${g.id}" aria-pressed="${g.confirmed ? 'true' : 'false'}" title="${g.confirmed ? 'Confirmado' : 'Marcar confirmado'}">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </button>
         <div>
           <div class="name">${esc(g.name)} ${g.is_plus_one ? '<span class="tag tag-plus">+1</span>' : ''}</div>
           <div class="phone">${g.phone ? esc(g.phone) : 'sin telefono'}</div>
@@ -578,6 +608,17 @@ function renderTableMembers(t) {
       $('#mt-count').textContent = updated.guests.length;
       renderTableMembers(updated);
       updateQuickList();
+    });
+    row.querySelector('.confirm-toggle').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const g = state.guests.find(x => x.id === id);
+      if (!g) return;
+      const next = g.confirmed ? 0 : 1;
+      g.confirmed = next;
+      e.currentTarget.classList.toggle('on', !!next);
+      row.classList.toggle('is-confirmed', !!next);
+      e.currentTarget.setAttribute('aria-pressed', next ? 'true' : 'false');
+      await api.setConfirmed(id, next);
     });
   });
 }

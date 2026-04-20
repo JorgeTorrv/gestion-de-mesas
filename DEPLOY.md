@@ -63,33 +63,23 @@ fly auth login       # si ya tienes
 ```
 Fly.io pide tarjeta incluso en el plan gratis (para evitar abuso), pero **no te cobra** mientras te quedes en el tier free (una maquina 256MB + 1 volumen 3GB).
 
-### 2.3. Lanzar la app
-Dentro de la carpeta del proyecto:
+### 2.3. Elegir nombre y registrar la app
+**No uses `fly launch`** — ya tienes `fly.toml`, `Dockerfile` y `.dockerignore` configurados, `fly launch` los pisaria.
+
+Primero edita `fly.toml` y cambia la linea `app = "gestion-de-mesas"` por un nombre globalmente unico, ejemplo `app = "mesas-juan-2026"`. Tu URL final va a ser `https://ese-nombre.fly.dev`.
+
+Luego, dentro de la carpeta del proyecto:
 ```bash
 cd "G:/Documentos/GestionDeMesas"
-fly launch --no-deploy
-```
-Flujo de preguntas:
-- **"App name"** → elige un nombre global unico, por ejemplo `mesas-juan` (tu URL sera `https://mesas-juan.fly.dev`). Si te dice que el del `fly.toml` ya existe, escribe uno nuevo.
-- **"Choose a region"** → `mia` (Miami) o la mas cercana a ti.
-- **"Would you like to set up a Postgres database?"** → **No**
-- **"Would you like to set up an Upstash Redis database?"** → **No**
-- **"Create .dockerignore from .gitignore?"** → **No** (ya existe)
-- **"Would you like to deploy now?"** → **No**
-
-Si te cambio el nombre de la app, tambien lo sobreescribio en `fly.toml`. Verifica que `[[mounts]]` sigue apuntando a `source = "mesas_data"` y `destination = "/data"`.
-
-### 2.4. Crear el volumen persistente
-```bash
-fly volumes create mesas_data --region mia --size 1
-```
-(Confirmas con `y`. El volumen es gratis hasta 3GB; con 1GB basta y sobra para miles de invitados.)
-
-### 2.5. Primer deploy manual (para verificar)
-```bash
+fly apps create mesas-juan-2026          # usa el MISMO nombre que pusiste en fly.toml
+fly volumes create mesas_data --region dfw --size 1 --yes
 fly deploy
 ```
-Cuando termine, abre la URL: `fly open` o `https://TU-APP.fly.dev`.
+- `fly apps create` registra la app en Fly.io (no deploya, solo reserva el nombre).
+- `fly volumes create` crea 1GB persistente en Dallas. Gratis hasta 3GB.
+- `fly deploy` construye la imagen Docker en los servidores de Fly y la pone online.
+
+Cuando termine el deploy, abre la URL con `fly open` o directamente `https://TU-APP.fly.dev`.
 
 ---
 

@@ -70,7 +70,8 @@ app.post('/api/guests', (req, res) => {
     extra_info = null,
     table_id = null,
     parent_id = null,
-    is_plus_one = 0
+    is_plus_one = 0,
+    confirmed = 0
   } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Nombre requerido' });
   const info = queries.createGuest.run(
@@ -80,7 +81,8 @@ app.post('/api/guests', (req, res) => {
     extra_info,
     table_id,
     parent_id,
-    is_plus_one ? 1 : 0
+    is_plus_one ? 1 : 0,
+    confirmed ? 1 : 0
   );
   res.json(enrichGuest(queries.getGuest.get(info.lastInsertRowid)));
 });
@@ -129,6 +131,15 @@ app.patch('/api/guests/:id/assign', (req, res) => {
   const existing = queries.getGuest.get(id);
   if (!existing) return res.status(404).json({ error: 'Invitado no encontrado' });
   queries.assignGuest.run(table_id ?? null, id);
+  res.json(enrichGuest(queries.getGuest.get(id)));
+});
+
+app.patch('/api/guests/:id/confirm', (req, res) => {
+  const id = Number(req.params.id);
+  const { confirmed } = req.body || {};
+  const existing = queries.getGuest.get(id);
+  if (!existing) return res.status(404).json({ error: 'Invitado no encontrado' });
+  queries.setConfirmed.run(confirmed ? 1 : 0, id);
   res.json(enrichGuest(queries.getGuest.get(id)));
 });
 

@@ -22,6 +22,8 @@ function load() {
           guest: Math.max(0, ...(parsed.guests || []).map(g => g.id))
         }
       };
+      // Backward-compat: ensure confirmed field exists on older records
+      for (const g of data.guests) if (g.confirmed === undefined) g.confirmed = 0;
     } catch (err) {
       console.error('Error leyendo DB JSON, arrancando vacio:', err.message);
     }
@@ -131,7 +133,7 @@ export const queries = {
     )
   },
   createGuest: {
-    run: (name, phone, email, extra_info, table_id, parent_id, is_plus_one) => {
+    run: (name, phone, email, extra_info, table_id, parent_id, is_plus_one, confirmed = 0) => {
       const id = nextGuestId();
       data.guests.push({
         id,
@@ -142,6 +144,7 @@ export const queries = {
         table_id: table_id ?? null,
         parent_id: parent_id ?? null,
         is_plus_one: is_plus_one ? 1 : 0,
+        confirmed: confirmed ? 1 : 0,
         created_at: nowISO()
       });
       save();
@@ -164,6 +167,14 @@ export const queries = {
       const g = data.guests.find(x => x.id === id);
       if (!g) return;
       g.table_id = table_id ?? null;
+      save();
+    }
+  },
+  setConfirmed: {
+    run: (confirmed, id) => {
+      const g = data.guests.find(x => x.id === id);
+      if (!g) return;
+      g.confirmed = confirmed ? 1 : 0;
       save();
     }
   },
@@ -213,6 +224,7 @@ export const queries = {
       table_id: g.table_id ? Number(g.table_id) : null,
       parent_id: g.parent_id ? Number(g.parent_id) : null,
       is_plus_one: g.is_plus_one ? 1 : 0,
+      confirmed: g.confirmed ? 1 : 0,
       created_at: g.created_at || nowISO()
     }));
     data.seq = payload.seq && typeof payload.seq === 'object' ? {

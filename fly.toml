@@ -1,9 +1,9 @@
 # fly.toml — configuracion para Fly.io
-# El nombre "app" debe ser unico globalmente; se genera al correr `fly launch`.
-# Si cambias el nombre, actualiza tambien la URL que vas a compartir.
+# CAMBIA el valor de "app" por un nombre globalmente unico antes del primer deploy
+# (ejemplo: mesas-juan-2026). La URL publica sera https://<app>.fly.dev
 
 app = "gestion-de-mesas"
-primary_region = "mia"   # Miami (bajo ping desde Mexico). Cambialo si lo usaras desde otra region.
+primary_region = "dfw"   # Dallas (bajo ping desde Mexico). Alternativas: qro (Queretaro), lax, iad.
 
 [build]
 
