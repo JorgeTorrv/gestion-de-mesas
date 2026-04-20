@@ -167,6 +167,7 @@ function connectSSE() {
 }
 
 // ============ LOAD ============
+let _hasBooted = false;
 async function refresh() {
   const data = await api.getState();
   state.tables = data.tables;
@@ -174,6 +175,12 @@ async function refresh() {
   state.settings = data.settings || { event_name: '' };
   applyEventName();
   render();
+  if (!_hasBooted) {
+    _hasBooted = true;
+    if (window.innerWidth <= 760 && state.tables.length) {
+      setTimeout(() => fitView(), 60);
+    }
+  }
 }
 
 function applyEventName() {
@@ -835,7 +842,7 @@ function setupZoomControls() {
     if (e.pointerType === 'touch') return;
     if (e.button !== 0) return;
     if (e.target.closest('.table-node')) return;
-    if (e.target.closest('.zoom-controls')) return;
+    if (e.target.closest('.zoom-controls, .floating-btn, button')) return;
     panning = {
       id: e.pointerId,
       startX: e.clientX, startY: e.clientY,
