@@ -10,6 +10,42 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(join(__dirname, 'public')));
 
+// ============ SSE (real-time sync) ============
+const sseClients = new Set();
+let clientSeq = 0;
+
+app.get('/api/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+  const id = String(++clientSeq);
+  const client = { id, res };
+  sseClients.add(client);
+  res.write(`data: ${JSON.stringify({ type: 'hello', payload: { id } })}\n\n`);
+  const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 20000);
+  req.on('close', () => { clearInterval(hb); sseClients.delete(client); try { res.end(); } catch {} });
+});
+
+function broadcast(type, payload) {
+  const msg = `data: ${JSON.stringify({ type, payload })}\n\n`;
+  for (const c of sseClients) {
+    try { c.res.write(msg); } catch { sseClients.delete(c); }
+  }
+}
+const origin = (req) => String(req.headers['x-client-id'] || '');
+
+// ============ HISTORY (undo) ============
+const HISTORY_LIMIT = 20;
+const history = [];
+function pushHistory() {
+  try {
+    history.push(queries.exportAll());
+    while (history.length > HISTORY_LIMIT) history.shift();
+  } catch {}
+}
+
 function enrichGuest(g) {
   if (!g) return g;
   const children = queries.getChildren.all(g.id);
@@ -29,15 +65,19 @@ app.get('/api/state', (req, res) => {
 });
 
 app.put('/api/settings', (req, res) => {
+  pushHistory();
   const updated = queries.updateSettings.run(req.body || {});
   res.json(updated);
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.post('/api/tables', (req, res) => {
   const { name, position_x = 0, position_y = 0, capacity = 10, shape = 'circle' } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Nombre requerido' });
+  pushHistory();
   const info = queries.createTable.run(name.trim(), position_x, position_y, capacity, shape);
   res.json(enrichTable(queries.getTable.get(info.lastInsertRowid)));
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.put('/api/tables/:id', (req, res) => {
@@ -51,22 +91,49 @@ app.put('/api/tables/:id', (req, res) => {
     capacity = existing.capacity,
     shape = existing.shape
   } = req.body || {};
+  pushHistory();
   queries.updateTable.run(name, position_x, position_y, capacity, id, shape);
   res.json(enrichTable(queries.getTable.get(id)));
+  broadcast('state.changed', { originId: origin(req) });
+});
+
+// Live drag position (ephemeral — broadcast only, no persist)
+app.post('/api/tables/:id/drag', (req, res) => {
+  const id = Number(req.params.id);
+  const { position_x, position_y } = req.body || {};
+  broadcast('table.drag', { id, position_x, position_y, originId: origin(req) });
+  res.json({ ok: true });
 });
 
 app.patch('/api/tables/:id/position', (req, res) => {
   const id = Number(req.params.id);
   const { position_x, position_y } = req.body || {};
+  pushHistory();
   queries.updateTablePosition.run(position_x, position_y, id);
   res.json({ ok: true });
+  broadcast('state.changed', { originId: origin(req) });
+});
+
+// Bulk reposition (auto-arrange)
+app.post('/api/tables/arrange', (req, res) => {
+  const positions = Array.isArray(req.body?.positions) ? req.body.positions : [];
+  pushHistory();
+  for (const p of positions) {
+    const id = Number(p.id);
+    if (!id) continue;
+    queries.updateTablePosition.run(Number(p.position_x) || 0, Number(p.position_y) || 0, id);
+  }
+  res.json({ ok: true });
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.delete('/api/tables/:id', (req, res) => {
   const id = Number(req.params.id);
+  pushHistory();
   queries.unassignGuestsFromTable.run(id);
   queries.deleteTable.run(id);
   res.json({ ok: true });
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.post('/api/guests', (req, res) => {
@@ -81,6 +148,7 @@ app.post('/api/guests', (req, res) => {
     confirmed = 0
   } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Nombre requerido' });
+  pushHistory();
   const info = queries.createGuest.run(
     name.trim(),
     phone,
@@ -92,6 +160,7 @@ app.post('/api/guests', (req, res) => {
     confirmed ? 1 : 0
   );
   res.json(enrichGuest(queries.getGuest.get(info.lastInsertRowid)));
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.post('/api/guests/bulk', (req, res) => {
@@ -125,13 +194,16 @@ app.post('/api/guests/bulk', (req, res) => {
     }
     return ids;
   });
+  pushHistory();
   const ids = insert(rows);
   res.json({ inserted: ids.length });
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.post('/api/tables/bulk', (req, res) => {
   const tables = Array.isArray(req.body?.tables) ? req.body.tables : [];
   if (!tables.length) return res.status(400).json({ error: 'Lista vacia' });
+  pushHistory();
   let created = 0;
   for (const t of tables) {
     const name = String(t?.name || '').trim();
@@ -146,6 +218,7 @@ app.post('/api/tables/bulk', (req, res) => {
     created++;
   }
   res.json({ created });
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.put('/api/guests/:id', (req, res) => {
@@ -158,8 +231,10 @@ app.put('/api/guests/:id', (req, res) => {
     email = existing.email,
     extra_info = existing.extra_info
   } = req.body || {};
+  pushHistory();
   queries.updateGuest.run(name, phone, email, extra_info, id);
   res.json(enrichGuest(queries.getGuest.get(id)));
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.patch('/api/guests/:id/assign', (req, res) => {
@@ -167,8 +242,10 @@ app.patch('/api/guests/:id/assign', (req, res) => {
   const { table_id } = req.body || {};
   const existing = queries.getGuest.get(id);
   if (!existing) return res.status(404).json({ error: 'Invitado no encontrado' });
+  pushHistory();
   queries.assignGuest.run(table_id ?? null, id);
   res.json(enrichGuest(queries.getGuest.get(id)));
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.patch('/api/guests/:id/confirm', (req, res) => {
@@ -176,19 +253,37 @@ app.patch('/api/guests/:id/confirm', (req, res) => {
   const { confirmed } = req.body || {};
   const existing = queries.getGuest.get(id);
   if (!existing) return res.status(404).json({ error: 'Invitado no encontrado' });
+  pushHistory();
   queries.setConfirmed.run(confirmed ? 1 : 0, id);
   res.json(enrichGuest(queries.getGuest.get(id)));
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.delete('/api/guests/:id', (req, res) => {
   const id = Number(req.params.id);
+  pushHistory();
   queries.deleteGuest.run(id);
   res.json({ ok: true });
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.post('/api/reset', (req, res) => {
+  pushHistory();
   queries.clearAll();
   res.json({ ok: true });
+  broadcast('state.changed', { originId: origin(req) });
+});
+
+app.post('/api/history/undo', (req, res) => {
+  if (!history.length) return res.status(400).json({ error: 'Nada que deshacer' });
+  const snap = history.pop();
+  try {
+    queries.replaceAll(snap);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+  res.json({ ok: true, remaining: history.length });
+  broadcast('state.changed', { originId: origin(req) });
 });
 
 app.get('/api/export', (req, res) => {
@@ -201,8 +296,10 @@ app.get('/api/export', (req, res) => {
 
 app.post('/api/import', (req, res) => {
   try {
+    pushHistory();
     queries.replaceAll(req.body);
     res.json({ ok: true, tables: req.body.tables?.length || 0, guests: req.body.guests?.length || 0 });
+    broadcast('state.changed', { originId: origin(req) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

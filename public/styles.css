@@ -386,7 +386,6 @@ html[data-theme="dark"] #btn-theme .icon-moon { display: inline; }
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--surface);
   pointer-events: auto;
-  cursor: help;
 }
 .seat.occupied:hover {
   transform: translate(-50%, -50%) scale(1.35);
@@ -411,41 +410,78 @@ html[data-theme="dark"] #btn-theme .icon-moon { display: inline; }
 }
 .seat-tip.hidden { display: none; }
 
-/* Shape picker (inside modals) */
+/* Shape picker (card style) */
 .shape-picker {
-  display: flex; gap: 10px; flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
-.shape-picker > label {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 8px 12px;
+.shape-option {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px;
+  padding: 16px 10px 12px;
   background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
   cursor: pointer;
-  font-size: 13px; font-weight: 500;
   user-select: none;
-  flex: 1 1 140px;
-  transition: border-color .12s, background .12s;
+  transition: border-color .15s, background .15s, transform .1s;
 }
-.shape-picker > label:hover { border-color: var(--border-strong); }
-.shape-picker > label:has(input:checked) {
+.shape-option:hover { border-color: var(--border-strong); }
+.shape-option input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.shape-option:has(input:checked) {
   background: var(--surface);
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(35,33,29,.08);
 }
-.shape-picker input[type="radio"] { accent-color: var(--accent); margin: 0; }
-.shape-picker input[type="radio"]:checked + .shape-opt {
+.shape-option:has(input:checked) .shape-draw {
   background: var(--accent);
   border-color: var(--accent);
 }
-.shape-opt {
-  display: inline-block;
-  width: 18px; height: 18px;
-  background: transparent;
-  border: 2px solid var(--border-strong);
+.shape-preview {
+  width: 64px; height: 44px;
+  display: grid; place-items: center;
 }
-.shape-circle { border-radius: 50%; }
-.shape-square { border-radius: 4px; }
+.shape-draw {
+  background: transparent;
+  border: 2.5px solid var(--border-strong);
+  transition: background .15s, border-color .15s;
+}
+.shape-draw.circle { width: 38px; height: 38px; border-radius: 50%; }
+.shape-draw.rect { width: 52px; height: 30px; border-radius: 4px; }
+.shape-name { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.shape-option:has(input:checked) .shape-name { color: var(--text); }
+
+/* Real-time remote drag + auto-arrange transitions */
+.table-node.remote-moving {
+  transition: left .09s linear, top .09s linear;
+  z-index: 9;
+}
+.table-node.rearrange {
+  transition: left .65s cubic-bezier(.22,.61,.36,1), top .65s cubic-bezier(.22,.61,.36,1);
+}
+
+/* Floating action button (auto-arrange) */
+.floating-btn {
+  position: fixed;
+  bottom: 12px; left: calc(320px + 140px);
+  width: 38px; height: 38px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  z-index: 15;
+  transition: background .12s, border-color .12s, transform .1s;
+}
+.floating-btn:hover { background: var(--bg-2); border-color: var(--border-strong); }
+.floating-btn:active { transform: scale(.95); }
 
 /* Sidebar view tabs */
 .view-tabs {
@@ -697,6 +733,7 @@ body.sidebar-open .sidebar-backdrop { opacity: 1; pointer-events: auto; }
   .btn .ico + .btn-label { display: none; }
   .icon-btn.only-mobile { display: none !important; }
   .zoom-controls { left: calc(280px + 12px); }
+  .floating-btn { left: calc(280px + 140px); }
 }
 
 /* Mobile */
@@ -740,6 +777,7 @@ body.sidebar-open .sidebar-backdrop { opacity: 1; pointer-events: auto; }
   .zoom-btn { padding: 9px 12px; min-width: 40px; font-size: 16px; }
   .zoom-label { min-width: 56px; font-size: 12px; }
   .canvas-hint { right: 10px; bottom: 64px; }
+  .floating-btn { bottom: 10px; left: auto; right: 10px; width: 44px; height: 44px; }
 }
 
 @media (max-width: 420px) {

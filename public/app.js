@@ -25,6 +25,11 @@ let lastPointerClient = null;
 let edgeScrollRaf = null;
 
 // ============ API ============
+let myClientId = null;
+const json = () => ({ 'Content-Type': 'application/json', 'x-client-id': myClientId || '' });
+async function post(url, body) { const r = await fetch(url, { method: 'POST', headers: json(), body: JSON.stringify(body) }); return r.json(); }
+async function put(url, body) { const r = await fetch(url, { method: 'PUT', headers: json(), body: JSON.stringify(body) }); return r.json(); }
+
 const api = {
   async getState() { const r = await fetch('/api/state'); return r.json(); },
   async createTable(data) { return post('/api/tables', data); },
@@ -38,15 +43,13 @@ const api = {
   async setConfirmed(id, confirmed) { return fetch(`/api/guests/${id}/confirm`, { method: 'PATCH', headers: json(), body: JSON.stringify({ confirmed: confirmed ? 1 : 0 }) }); },
   async deleteGuest(id) { return fetch(`/api/guests/${id}`, { method: 'DELETE' }); },
   async reset() { return post('/api/reset', {}); },
+  async undo() { return fetch('/api/history/undo', { method: 'POST', headers: json() }); },
   async importPayload(payload) {
     const r = await fetch('/api/import', { method: 'POST', headers: json(), body: JSON.stringify(payload) });
     if (!r.ok) throw new Error((await r.json()).error || 'Error al importar');
     return r.json();
   }
 };
-const json = () => ({ 'Content-Type': 'application/json' });
-async function post(url, body) { const r = await fetch(url, { method: 'POST', headers: json(), body: JSON.stringify(body) }); return r.json(); }
-async function put(url, body) { const r = await fetch(url, { method: 'PUT', headers: json(), body: JSON.stringify(body) }); return r.json(); }
 
 // ============ UTIL ============
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -110,6 +113,57 @@ function toast(msg, kind = '') {
   t.className = 'toast ' + kind;
   clearTimeout(toast._tid);
   toast._tid = setTimeout(() => t.classList.add('hidden'), 2400);
+}
+
+// ============ REAL-TIME (SSE) ============
+let refreshDebounce = null;
+let pendingRefresh = false;
+
+function scheduleRefresh() {
+  if (state.dragActive) { pendingRefresh = true; return; }
+  if (refreshDebounce) clearTimeout(refreshDebounce);
+  refreshDebounce = setTimeout(() => {
+    refreshDebounce = null;
+    pendingRefresh = false;
+    refresh();
+  }, 150);
+}
+
+function applyRemoteDrag({ id, position_x, position_y }) {
+  const t = state.tables.find(x => x.id === id);
+  if (t) { t.position_x = position_x; t.position_y = position_y; }
+  const node = document.querySelector(`.table-node[data-table-id="${id}"]`);
+  if (!node) return;
+  node.classList.add('remote-moving');
+  node.style.left = position_x + 'px';
+  node.style.top = position_y + 'px';
+  clearTimeout(node._remoteTimer);
+  node._remoteTimer = setTimeout(() => node.classList.remove('remote-moving'), 260);
+}
+
+function connectSSE() {
+  let es = null;
+  let backoff = 1000;
+  function open() {
+    try { es?.close(); } catch {}
+    es = new EventSource('/api/events');
+    es.onopen = () => { backoff = 1000; };
+    es.onmessage = (e) => {
+      try {
+        const { type, payload } = JSON.parse(e.data);
+        if (type === 'hello') { myClientId = payload.id; return; }
+        if (payload?.originId && payload.originId === myClientId) return;
+        if (type === 'state.changed') scheduleRefresh();
+        else if (type === 'table.drag') applyRemoteDrag(payload);
+      } catch {}
+    };
+    es.onerror = () => {
+      try { es.close(); } catch {}
+      setTimeout(open, Math.min(backoff, 15000));
+      backoff *= 2;
+    };
+  }
+  open();
 }
 
 // ============ LOAD ============
@@ -240,11 +294,16 @@ function renderGuestList() {
 }
 
 // ============ ZOOM / CANVAS SIZE / EDGE SCROLL ============
-function tableSize(t) {
+function tableDim(t) {
   const count = t.guests.length;
   const cap = Math.max(count, Number(t.capacity) || 10);
-  return Math.max(140, Math.min(340, 140 + cap * 10));
+  const base = Math.max(140, Math.min(340, 140 + cap * 10));
+  if (t.shape === 'square') {
+    return { w: Math.round(base * 1.3), h: Math.round(base * 0.7), base };
+  }
+  return { w: base, h: base, base };
 }
+function tableSize(t) { const { w, h } = tableDim(t); return Math.max(w, h); }
 
 function updateCanvasSize(extra) {
   const wrap = $('.canvas-wrap');
@@ -252,9 +311,9 @@ function updateCanvasSize(extra) {
   let w = Math.ceil(wrap.clientWidth / state.zoom) + 100;
   let h = Math.ceil(wrap.clientHeight / state.zoom) + 100;
   state.tables.forEach(t => {
-    const s = tableSize(t);
-    w = Math.max(w, t.position_x + s + pad);
-    h = Math.max(h, t.position_y + s + pad + 40); // +40 for name label below
+    const d = tableDim(t);
+    w = Math.max(w, t.position_x + d.w + pad);
+    h = Math.max(h, t.position_y + d.h + pad + 40); // +40 for name label below
   });
   if (extra) {
     w = Math.max(w, extra.x + pad);
@@ -313,11 +372,11 @@ function fitView() {
   const wrap = $('.canvas-wrap');
   let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
   state.tables.forEach(t => {
-    const s = tableSize(t);
+    const d = tableDim(t);
     minX = Math.min(minX, t.position_x);
     minY = Math.min(minY, t.position_y);
-    maxX = Math.max(maxX, t.position_x + s);
-    maxY = Math.max(maxY, t.position_y + s + 40);
+    maxX = Math.max(maxX, t.position_x + d.w);
+    maxY = Math.max(maxY, t.position_y + d.h + 40);
   });
   const contentW = Math.max(1, maxX - minX + 120);
   const contentH = Math.max(1, maxY - minY + 120);
@@ -369,24 +428,22 @@ function edgeScrollTick() {
 }
 
 // ============ CANVAS ============
-function seatPosition(shape, size, i, seats) {
+function seatPosition(shape, w, h, i, seats) {
   if (shape === 'square') {
     const offset = 6;
-    const perimeter = 4 * size;
-    // Start at top-center so first seat is visually "at the top"
-    const startDist = size / 2;
+    const perimeter = 2 * w + 2 * h;
+    const startDist = w / 2;
     const d = (startDist + (i / seats) * perimeter) % perimeter;
-    if (d < size)        return { x: d,               y: -offset };
-    if (d < 2 * size)    return { x: size + offset,   y: d - size };
-    if (d < 3 * size)    return { x: size - (d - 2*size), y: size + offset };
-    return                      { x: -offset,         y: size - (d - 3*size) };
+    if (d < w)           return { x: d,                     y: -offset };
+    if (d < w + h)       return { x: w + offset,            y: d - w };
+    if (d < 2*w + h)     return { x: w - (d - w - h),       y: h + offset };
+    return                      { x: -offset,               y: h - (d - 2*w - h) };
   }
-  // circle
   const angle = (i / seats) * Math.PI * 2 - Math.PI / 2;
-  const r = size / 2 + 6;
+  const r = w / 2 + 6;
   return {
-    x: size / 2 + r * Math.cos(angle),
-    y: size / 2 + r * Math.sin(angle)
+    x: w / 2 + r * Math.cos(angle),
+    y: h / 2 + r * Math.sin(angle)
   };
 }
 
@@ -401,8 +458,7 @@ function renderCanvas() {
     const displayCap = Math.max(count, baseCap);
     const overBase = count > baseCap;
     const shape = t.shape === 'square' ? 'square' : 'circle';
-
-    const size = Math.max(140, Math.min(340, 140 + displayCap * 10));
+    const { w, h } = tableDim(t);
 
     const node = document.createElement('div');
     node.className = 'table-node';
@@ -411,7 +467,7 @@ function renderCanvas() {
     node.style.top = `${t.position_y}px`;
 
     node.innerHTML = `
-      <div class="table-circle ${shape === 'square' ? 'square' : ''}" style="width:${size}px;height:${size}px;">
+      <div class="table-circle ${shape === 'square' ? 'square' : ''}" style="width:${w}px;height:${h}px;">
         <div class="table-center">
           <div class="table-count ${overBase ? 'over' : ''}">${count}</div>
           <div class="table-label">de ${displayCap}</div>
@@ -423,7 +479,7 @@ function renderCanvas() {
     const circle = node.querySelector('.table-circle');
     const seats = displayCap;
     for (let i = 0; i < seats; i++) {
-      const { x, y } = seatPosition(shape, size, i, seats);
+      const { x, y } = seatPosition(shape, w, h, i, seats);
       const dot = document.createElement('div');
       let cls = 'seat';
       const isOccupied = i < count;
@@ -500,10 +556,25 @@ function renderTableList() {
   });
 }
 
+let _lastDragBroadcast = 0;
+function broadcastTableDrag(id, x, y) {
+  if (!myClientId) return;
+  const now = performance.now();
+  if (now - _lastDragBroadcast < 33) return;
+  _lastDragBroadcast = now;
+  fetch(`/api/tables/${id}/drag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-client-id': myClientId },
+    body: JSON.stringify({ position_x: x, position_y: y }),
+    keepalive: true
+  }).catch(() => {});
+}
+
 function attachTableInteractions(node, table) {
   enableDragOrClick(node, {
     onClick: () => openTableModal(table.id),
     moveTarget: node,
+    onDragTick: (x, y) => broadcastTableDrag(table.id, x, y),
     onPositionChange: async (x, y) => {
       table.position_x = x;
       table.position_y = y;
@@ -525,7 +596,7 @@ function pointerToCanvas(clientX, clientY) {
 }
 
 function enableDragOrClick(el, opts) {
-  const { onClick, ghostLabel, onDrop, onPositionChange, moveTarget, skipOn } = opts;
+  const { onClick, ghostLabel, onDrop, onPositionChange, onDragTick, moveTarget, skipOn } = opts;
   const isRepositionMode = !!onPositionChange;
 
   let pointerId = null;
@@ -605,6 +676,11 @@ function enableDragOrClick(el, opts) {
       moveTarget.classList.add('drag-moving');
       e.preventDefault();
       applyPosition();
+      if (onDragTick) {
+        const fx = parseFloat(moveTarget.style.left) || 0;
+        const fy = parseFloat(moveTarget.style.top) || 0;
+        onDragTick(fx, fy);
+      }
       if (!state.dragActive) {
         state.dragActive = true;
         state.dragTick = applyPosition;
@@ -665,6 +741,7 @@ function enableDragOrClick(el, opts) {
       } else {
         onClick?.();
       }
+      if (pendingRefresh) scheduleRefresh();
       return;
     }
 
@@ -1252,6 +1329,59 @@ $$('.chip').forEach(c => {
   });
 });
 
+// ============ AUTO-ARRANGE TABLES ============
+async function autoArrangeTables() {
+  if (!state.tables.length) { toast('No hay mesas', 'error'); return; }
+  const wrap = $('.canvas-wrap');
+  const maxW = Math.max(900, Math.floor(wrap.clientWidth / state.zoom) - 80);
+  const pad = 40;
+  const nameGap = 36;
+  let x = pad, y = pad, rowH = 0;
+  const updates = [];
+  const sorted = [...state.tables].sort((a, b) => a.id - b.id);
+
+  for (const t of sorted) {
+    const { w, h } = tableDim(t);
+    const fullH = h + nameGap;
+    if (x > pad && x + w > maxW) {
+      x = pad;
+      y += rowH + pad;
+      rowH = 0;
+    }
+    updates.push({ id: t.id, position_x: x, position_y: y });
+    x += w + pad;
+    if (fullH > rowH) rowH = fullH;
+  }
+
+  for (const u of updates) {
+    const node = document.querySelector(`.table-node[data-table-id="${u.id}"]`);
+    if (node) {
+      node.classList.add('rearrange');
+      node.style.left = u.position_x + 'px';
+      node.style.top = u.position_y + 'px';
+      setTimeout(() => node.classList.remove('rearrange'), 700);
+    }
+    const t = state.tables.find(x => x.id === u.id);
+    if (t) { t.position_x = u.position_x; t.position_y = u.position_y; }
+  }
+  updateCanvasSize();
+
+  await fetch('/api/tables/arrange', {
+    method: 'POST',
+    headers: json(),
+    body: JSON.stringify({ positions: updates })
+  });
+  toast('Mesas ordenadas', 'success');
+}
+
+// ============ UNDO ============
+async function undoLast() {
+  const r = await api.undo();
+  if (!r.ok) { toast('Nada que deshacer', 'error'); return; }
+  toast('Deshecho', 'success');
+  await refresh();
+}
+
 // ============ SIDEBAR VIEW TABS ============
 function setView(view) {
   state.view = view;
@@ -1397,6 +1527,18 @@ $('#btn-theme').addEventListener('click', () => {
   applyTheme(cur === 'dark' ? 'light' : 'dark', true);
 });
 
+// ============ AUTO-ARRANGE / UNDO UI ============
+$('#btn-arrange').addEventListener('click', autoArrangeTables);
+$('#btn-undo').addEventListener('click', undoLast);
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+    if (e.target.closest('input, textarea, select')) return;
+    e.preventDefault();
+    undoLast();
+  }
+});
+
 // ============ BOOT ============
 setupZoomControls();
+connectSSE();
 refresh();
