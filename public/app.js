@@ -52,6 +52,57 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
+// ============ IN-PAGE DIALOG ============
+function showDialog({ title, message, input = false, defaultValue = '', okText = 'Aceptar', cancelText = 'Cancelar', danger = false } = {}) {
+  return new Promise(resolve => {
+    const modal = $('#modal-dialog');
+    const wrap = $('#md-input-wrap');
+    const inp = $('#md-input');
+    const ok = $('#md-ok');
+    const cancel = $('#md-cancel');
+
+    $('#md-title').textContent = title || 'Confirmar';
+    $('#md-message').textContent = message || '';
+    ok.textContent = okText;
+    cancel.textContent = cancelText;
+    ok.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
+
+    if (input) {
+      wrap.style.display = '';
+      inp.value = defaultValue || '';
+    } else {
+      wrap.style.display = 'none';
+    }
+
+    function cleanup(result) {
+      modal.classList.add('hidden');
+      ok.removeEventListener('click', onOk);
+      cancel.removeEventListener('click', onCancel);
+      modal.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKey, true);
+      resolve(result);
+    }
+    function onOk() { cleanup(input ? inp.value.trim() : true); }
+    function onCancel() { cleanup(input ? null : false); }
+    function onBackdrop(e) { if (e.target === modal) onCancel(); }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel(); }
+      else if (e.key === 'Enter' && (!input || document.activeElement === inp)) { e.preventDefault(); e.stopPropagation(); onOk(); }
+    }
+
+    ok.addEventListener('click', onOk);
+    cancel.addEventListener('click', onCancel);
+    modal.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKey, true);
+
+    modal.classList.remove('hidden');
+    if (input) setTimeout(() => { inp.focus(); inp.select(); }, 50);
+    else setTimeout(() => ok.focus(), 50);
+  });
+}
+const confirmDialog = (message, opts = {}) => showDialog({ message, ...opts });
+const promptDialog = (message, defaultValue = '', opts = {}) => showDialog({ message, input: true, defaultValue, ...opts });
+
 function toast(msg, kind = '') {
   const t = $('#toast');
   t.textContent = msg;
@@ -79,9 +130,12 @@ function applyEventName() {
 
 async function renameEvent() {
   const current = state.settings.event_name || '';
-  const v = prompt('Nombre del evento (vacio para usar el por defecto):', current);
+  const v = await promptDialog('Elige un nombre para este evento. Dejar vacio usa el nombre por defecto.', current, {
+    title: 'Renombrar evento',
+    okText: 'Guardar'
+  });
   if (v === null) return;
-  const name = v.trim();
+  const name = v;
   state.settings.event_name = name;
   applyEventName();
   await fetch('/api/settings', {
@@ -780,7 +834,7 @@ function buildChildRow(child, pending, pendingIdx) {
       openGuestModal(state.currentGuestId);
     });
     del.addEventListener('click', async () => {
-      if (!confirm('Eliminar acompanante?')) return;
+      if (!(await confirmDialog('Se eliminara este acompanante. No se puede deshacer.', { title: 'Eliminar acompanante', okText: 'Eliminar', danger: true }))) return;
       await api.deleteGuest(child.id);
       await refresh();
       openGuestModal(state.currentGuestId);
@@ -842,7 +896,7 @@ $('#mg-save').addEventListener('click', async () => {
 });
 
 $('#mg-delete').addEventListener('click', async () => {
-  if (!confirm('Eliminar este invitado y sus acompanantes?')) return;
+  if (!(await confirmDialog('Se eliminara el invitado y todos sus acompanantes. Esta accion no se puede deshacer.', { title: 'Eliminar invitado', okText: 'Eliminar', danger: true }))) return;
   await api.deleteGuest(state.currentGuestId);
   closeModal('#modal-guest');
   refresh();
@@ -967,7 +1021,7 @@ $('#mt-save').addEventListener('click', async () => {
 });
 
 $('#mt-delete').addEventListener('click', async () => {
-  if (!confirm('Eliminar esta mesa? Los invitados quedaran sin mesa.')) return;
+  if (!(await confirmDialog('Los invitados asignados quedaran sin mesa. La mesa se elimina de forma permanente.', { title: 'Eliminar mesa', okText: 'Eliminar', danger: true }))) return;
   await api.deleteTable(state.currentTableId);
   closeModal('#modal-table');
   refresh();
@@ -1070,9 +1124,11 @@ $('#backup-input').addEventListener('change', async (e) => {
     if (!Array.isArray(payload.tables) || !Array.isArray(payload.guests)) {
       toast('Archivo no valido', 'error'); return;
     }
-    if (!confirm(`Cargar respaldo con ${payload.tables.length} mesas y ${payload.guests.length} invitados? Esto reemplaza TODO lo actual.`)) {
-      e.target.value = ''; return;
-    }
+    const ok = await confirmDialog(
+      `Se cargaran ${payload.tables.length} mesas y ${payload.guests.length} invitados. Esto reemplaza TODO lo que tienes actualmente.`,
+      { title: 'Cargar respaldo', okText: 'Reemplazar', danger: true }
+    );
+    if (!ok) { e.target.value = ''; return; }
     await api.importPayload(payload);
     toast('Respaldo cargado', 'success');
     await refresh();
@@ -1084,7 +1140,7 @@ $('#backup-input').addEventListener('change', async (e) => {
 
 // ============ RESET ============
 $('#btn-reset').addEventListener('click', async () => {
-  if (!confirm('Borrar TODO (mesas e invitados)? Esta accion no se puede deshacer.')) return;
+  if (!(await confirmDialog('Se borraran TODAS las mesas e invitados. Esta accion no se puede deshacer.', { title: 'Borrar todo', okText: 'Borrar todo', danger: true }))) return;
   await api.reset();
   toast('Todo borrado', 'success');
   refresh();
@@ -1215,18 +1271,24 @@ document.addEventListener('keydown', (e) => {
 
 // ============ RENAME EVENT ============
 $('#app-title').addEventListener('click', renameEvent);
-$('#btn-rename').addEventListener('click', renameEvent);
 
 // ============ THEME TOGGLE ============
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
+let themeTransitionTimer = null;
+function applyTheme(theme, animate = false) {
+  const root = document.documentElement;
+  if (animate) {
+    root.classList.add('theme-transition');
+    clearTimeout(themeTransitionTimer);
+    themeTransitionTimer = setTimeout(() => root.classList.remove('theme-transition'), 350);
+  }
+  root.setAttribute('data-theme', theme);
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', theme === 'dark' ? '#15171b' : '#faf9f5');
   try { localStorage.setItem('theme', theme); } catch {}
 }
 $('#btn-theme').addEventListener('click', () => {
   const cur = document.documentElement.getAttribute('data-theme') || 'light';
-  applyTheme(cur === 'dark' ? 'light' : 'dark');
+  applyTheme(cur === 'dark' ? 'light' : 'dark', true);
 });
 
 // ============ BOOT ============
