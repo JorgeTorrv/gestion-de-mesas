@@ -34,9 +34,9 @@ app.put('/api/settings', (req, res) => {
 });
 
 app.post('/api/tables', (req, res) => {
-  const { name, position_x = 0, position_y = 0, capacity = 10 } = req.body || {};
+  const { name, position_x = 0, position_y = 0, capacity = 10, shape = 'circle' } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Nombre requerido' });
-  const info = queries.createTable.run(name.trim(), position_x, position_y, capacity);
+  const info = queries.createTable.run(name.trim(), position_x, position_y, capacity, shape);
   res.json(enrichTable(queries.getTable.get(info.lastInsertRowid)));
 });
 
@@ -48,9 +48,10 @@ app.put('/api/tables/:id', (req, res) => {
     name = existing.name,
     position_x = existing.position_x,
     position_y = existing.position_y,
-    capacity = existing.capacity
+    capacity = existing.capacity,
+    shape = existing.shape
   } = req.body || {};
-  queries.updateTable.run(name, position_x, position_y, capacity, id);
+  queries.updateTable.run(name, position_x, position_y, capacity, id, shape);
   res.json(enrichTable(queries.getTable.get(id)));
 });
 
@@ -139,7 +140,8 @@ app.post('/api/tables/bulk', (req, res) => {
       name,
       Number(t.position_x) || 0,
       Number(t.position_y) || 0,
-      Number(t.capacity) || 10
+      Number(t.capacity) || 10,
+      t.shape === 'square' ? 'square' : 'circle'
     );
     created++;
   }

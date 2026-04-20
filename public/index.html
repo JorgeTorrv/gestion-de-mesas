@@ -67,26 +67,27 @@
         <div><strong id="count-unassigned">0</strong><span>Sin mesa</span></div>
         <div><strong id="count-tables">0</strong><span>Mesas</span></div>
       </div>
-      <div class="search-wrap">
-        <input id="search" type="text" placeholder="Buscar invitado..." />
+      <div class="view-tabs">
+        <button class="tab-btn tab-active" data-view="guests">Invitados</button>
+        <button class="tab-btn" data-view="tables">Mesas</button>
       </div>
-      <div class="filters">
+      <div class="search-wrap">
+        <input id="search" type="text" placeholder="Buscar..." />
+      </div>
+      <div class="filters" id="guest-filters">
         <button class="chip chip-active" data-filter="all">Todos</button>
         <button class="chip" data-filter="unassigned">Sin mesa</button>
         <button class="chip" data-filter="assigned">Asignados</button>
       </div>
     </div>
     <div id="guest-list" class="guest-list"></div>
+    <div id="table-list" class="guest-list" style="display:none;"></div>
   </aside>
   <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
 
   <section class="canvas-wrap">
     <div id="canvas-outer" class="canvas-outer">
       <div id="canvas" class="canvas"></div>
-    </div>
-    <div class="canvas-hint">
-      <span class="only-desktop">Arrastra invitados desde la lista o haz click en una mesa. Ctrl+rueda para hacer zoom.</span>
-      <span class="only-mobile">Toca una mesa para ver su gente. Toca un invitado para asignarlo.</span>
     </div>
     <div class="zoom-controls">
       <button id="zoom-out" class="zoom-btn" title="Alejar (Ctrl+-)">−</button>
@@ -105,7 +106,6 @@
       <label class="confirm-row">
         <input type="checkbox" id="mg-confirmed-input" />
         <span class="confirm-label">Confirmado</span>
-        <span class="hint" style="margin-left:auto;">Solo referencia visual</span>
       </label>
       <div class="field"><label>Nombre</label><input id="mg-name-input" /></div>
       <div class="field-row">
@@ -120,10 +120,9 @@
 
       <hr/>
       <div class="section-title">
-        <h3>Acompanantes (plus ones)</h3>
+        <h3>Acompanantes</h3>
         <button id="mg-add-plus" class="btn btn-ghost btn-sm">+ Agregar</button>
       </div>
-      <p class="hint">Cada acompanante es una persona independiente. Puede ir a la misma mesa que el invitado (cuenta como 1 mas) o a otra mesa (cada quien cuenta 1 en su mesa).</p>
       <div id="mg-children" class="children-list"></div>
     </div>
     <div class="modal-actions">
@@ -144,7 +143,14 @@
     <div class="modal-body">
       <div class="field-row">
         <div class="field"><label>Nombre</label><input id="mt-name-input" /></div>
-        <div class="field field-sm"><label>Capacidad base</label><input id="mt-capacity-input" type="number" min="1" /></div>
+        <div class="field field-sm"><label>Capacidad</label><input id="mt-capacity-input" type="number" min="1" /></div>
+      </div>
+      <div class="field">
+        <label>Forma</label>
+        <div class="shape-picker">
+          <label><input type="radio" name="mt-shape" value="circle"><span class="shape-opt shape-circle"></span>Redonda</label>
+          <label><input type="radio" name="mt-shape" value="square"><span class="shape-opt shape-square"></span>Cuadrada</label>
+        </div>
       </div>
 
       <div class="section-title"><h3>Invitados en esta mesa</h3></div>
@@ -198,10 +204,16 @@
     <div class="modal-body">
       <div class="field"><label>Nombre *</label><input id="nt-name" placeholder="Ej. Mesa 1" /></div>
       <div class="field-row">
-        <div class="field"><label>Capacidad base</label><input id="nt-capacity" type="number" value="10" min="1" /></div>
+        <div class="field"><label>Capacidad</label><input id="nt-capacity" type="number" value="10" min="1" /></div>
         <div class="field field-sm"><label>Cantidad</label><input id="nt-count" type="number" value="1" min="1" max="50" /></div>
       </div>
-      <p class="hint">Si creas varias a la vez, se nombran automaticamente continuando la numeracion (Mesa N, N+1, ...).</p>
+      <div class="field">
+        <label>Forma</label>
+        <div class="shape-picker">
+          <label><input type="radio" name="nt-shape" value="circle" checked><span class="shape-opt shape-circle"></span>Redonda</label>
+          <label><input type="radio" name="nt-shape" value="square"><span class="shape-opt shape-square"></span>Cuadrada</label>
+        </div>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" data-close>Cancelar</button>
@@ -216,7 +228,6 @@
     <button class="modal-close" data-close>&times;</button>
     <h2>Importar desde Excel</h2>
     <div class="modal-body">
-      <p class="hint">Selecciona que columna corresponde a cada dato. La vista previa muestra las primeras filas detectadas.</p>
       <div class="import-grid">
         <div class="field"><label>Nombre *</label><select id="imp-name"></select></div>
         <div class="field"><label>Telefono</label><select id="imp-phone"></select></div>
@@ -224,7 +235,6 @@
         <div class="field"><label>Nota/Extra</label><select id="imp-extra"></select></div>
         <div class="field"><label>Cantidad (x asientos)</label><select id="imp-size"></select></div>
       </div>
-      <p class="hint" style="margin-top:4px;">Si eliges "Cantidad", una celda como "Juan y Luis" con valor 2 crea 2 asientos juntos (invitado + 1 acompanante).</p>
       <div class="import-preview">
         <table><thead id="imp-thead"></thead><tbody id="imp-tbody"></tbody></table>
       </div>
@@ -257,6 +267,7 @@
 <div id="toast" class="toast hidden"></div>
 
 <div id="drag-ghost" class="drag-ghost hidden"></div>
+<div id="seat-tip" class="seat-tip hidden"></div>
 
 <script src="app.js" type="module"></script>
 </body>

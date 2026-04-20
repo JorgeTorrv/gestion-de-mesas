@@ -4,6 +4,7 @@ const state = {
   guests: [],
   filter: 'all',
   search: '',
+  view: 'guests',
   currentGuestId: null,
   currentTableId: null,
   pendingChildren: [],
@@ -148,6 +149,7 @@ async function renameEvent() {
 
 function render() {
   renderGuestList();
+  renderTableList();
   renderCanvas();
   renderCounts();
 }
@@ -367,6 +369,27 @@ function edgeScrollTick() {
 }
 
 // ============ CANVAS ============
+function seatPosition(shape, size, i, seats) {
+  if (shape === 'square') {
+    const offset = 6;
+    const perimeter = 4 * size;
+    // Start at top-center so first seat is visually "at the top"
+    const startDist = size / 2;
+    const d = (startDist + (i / seats) * perimeter) % perimeter;
+    if (d < size)        return { x: d,               y: -offset };
+    if (d < 2 * size)    return { x: size + offset,   y: d - size };
+    if (d < 3 * size)    return { x: size - (d - 2*size), y: size + offset };
+    return                      { x: -offset,         y: size - (d - 3*size) };
+  }
+  // circle
+  const angle = (i / seats) * Math.PI * 2 - Math.PI / 2;
+  const r = size / 2 + 6;
+  return {
+    x: size / 2 + r * Math.cos(angle),
+    y: size / 2 + r * Math.sin(angle)
+  };
+}
+
 function renderCanvas() {
   const canvas = $('#canvas');
   canvas.innerHTML = '';
@@ -377,6 +400,7 @@ function renderCanvas() {
     const baseCap = Number(t.capacity) || 10;
     const displayCap = Math.max(count, baseCap);
     const overBase = count > baseCap;
+    const shape = t.shape === 'square' ? 'square' : 'circle';
 
     const size = Math.max(140, Math.min(340, 140 + displayCap * 10));
 
@@ -387,7 +411,7 @@ function renderCanvas() {
     node.style.top = `${t.position_y}px`;
 
     node.innerHTML = `
-      <div class="table-circle" style="width:${size}px;height:${size}px;">
+      <div class="table-circle ${shape === 'square' ? 'square' : ''}" style="width:${size}px;height:${size}px;">
         <div class="table-center">
           <div class="table-count ${overBase ? 'over' : ''}">${count}</div>
           <div class="table-label">de ${displayCap}</div>
@@ -399,22 +423,80 @@ function renderCanvas() {
     const circle = node.querySelector('.table-circle');
     const seats = displayCap;
     for (let i = 0; i < seats; i++) {
-      const angle = (i / seats) * Math.PI * 2 - Math.PI / 2;
-      const r = size / 2 + 6;
-      const x = size / 2 + r * Math.cos(angle);
-      const y = size / 2 + r * Math.sin(angle);
+      const { x, y } = seatPosition(shape, size, i, seats);
       const dot = document.createElement('div');
       let cls = 'seat';
-      if (i < count) cls += ' occupied';
+      const isOccupied = i < count;
+      if (isOccupied) cls += ' occupied';
       if (i >= baseCap) cls += ' over-base';
       dot.className = cls;
       dot.style.left = x + 'px';
       dot.style.top = y + 'px';
+      if (isOccupied) {
+        const guest = t.guests[i];
+        dot.dataset.name = guest?.name || '';
+        attachSeatTooltip(dot);
+      }
       circle.appendChild(dot);
     }
 
     canvas.appendChild(node);
     attachTableInteractions(node, t);
+  });
+}
+
+function attachSeatTooltip(seatEl) {
+  seatEl.addEventListener('mouseenter', () => {
+    const tip = $('#seat-tip');
+    tip.textContent = seatEl.dataset.name || '';
+    tip.classList.remove('hidden');
+    positionSeatTip(seatEl);
+  });
+  seatEl.addEventListener('mouseleave', () => {
+    $('#seat-tip').classList.add('hidden');
+  });
+}
+function positionSeatTip(seatEl) {
+  const tip = $('#seat-tip');
+  const rect = seatEl.getBoundingClientRect();
+  tip.style.left = (rect.left + rect.width / 2) + 'px';
+  tip.style.top = rect.top + 'px';
+}
+
+// ============ TABLE LIST (sidebar) ============
+function renderTableList() {
+  const list = $('#table-list');
+  const q = state.search.toLowerCase().trim();
+  const items = state.tables.filter(t => !q || t.name.toLowerCase().includes(q));
+
+  if (!items.length) {
+    list.innerHTML = `<div class="guest-empty">Sin mesas.<br/>Agrega una con el boton de arriba.</div>`;
+    return;
+  }
+
+  list.innerHTML = items.map(t => {
+    const count = t.guests.length;
+    const cap = Number(t.capacity) || 10;
+    const shape = t.shape === 'square' ? 'square' : 'circle';
+    const over = count > cap;
+    const full = count >= cap && !over;
+    const countCls = over ? 'over' : (full ? 'full' : '');
+    return `
+      <div class="table-card" data-table-id="${t.id}">
+        <span class="tc-shape ${shape}"></span>
+        <div class="tc-main">
+          <div class="tc-name">${esc(t.name)}</div>
+          <div class="tc-meta">Capacidad ${cap}${over ? ` · +${count - cap} extra` : ''}</div>
+        </div>
+        <span class="tc-count ${countCls}">${count}/${cap}</span>
+      </div>`;
+  }).join('');
+
+  $$('.table-card', list).forEach(el => {
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset.tableId);
+      openTableModal(id);
+    });
   });
 }
 
@@ -912,6 +994,9 @@ function openTableModal(id) {
   $('#mt-count').textContent = t.guests.length;
   $('#mt-name-input').value = t.name;
   $('#mt-capacity-input').value = t.capacity || 10;
+  const shape = t.shape === 'square' ? 'square' : 'circle';
+  const shapeInput = document.querySelector(`input[name="mt-shape"][value="${shape}"]`);
+  if (shapeInput) shapeInput.checked = true;
 
   renderTableMembers(t);
   updateQuickList();
@@ -1011,9 +1096,11 @@ $('#mt-new-add').addEventListener('click', async () => {
 });
 
 $('#mt-save').addEventListener('click', async () => {
+  const shapeEl = document.querySelector('input[name="mt-shape"]:checked');
   await api.updateTable(state.currentTableId, {
     name: $('#mt-name-input').value.trim() || 'Mesa',
-    capacity: Number($('#mt-capacity-input').value) || 10
+    capacity: Number($('#mt-capacity-input').value) || 10,
+    shape: shapeEl ? shapeEl.value : 'circle'
   });
   toast('Mesa actualizada', 'success');
   closeModal('#modal-table');
@@ -1064,6 +1151,8 @@ $('#btn-new-table').addEventListener('click', () => {
 $('#nt-save').addEventListener('click', async () => {
   const count = Math.max(1, Math.min(50, Number($('#nt-count').value) || 1));
   const capacity = Number($('#nt-capacity').value) || 10;
+  const shapeEl = document.querySelector('input[name="nt-shape"]:checked');
+  const shape = shapeEl ? shapeEl.value : 'circle';
   const cols = 4;
   const startIdx = state.tables.length;
   const tables = [];
@@ -1075,7 +1164,8 @@ $('#nt-save').addEventListener('click', async () => {
       name,
       position_x: 80 + (startIdx % cols) * 280,
       position_y: 80 + Math.floor(startIdx / cols) * 280,
-      capacity
+      capacity,
+      shape
     });
   } else {
     const startNum = getNextTableNumber();
@@ -1085,7 +1175,8 @@ $('#nt-save').addEventListener('click', async () => {
         name: `Mesa ${startNum + i}`,
         position_x: 80 + (idx % cols) * 280,
         position_y: 80 + Math.floor(idx / cols) * 280,
-        capacity
+        capacity,
+        shape
       });
     }
   }
@@ -1150,6 +1241,7 @@ $('#btn-reset').addEventListener('click', async () => {
 $('#search').addEventListener('input', (e) => {
   state.search = e.target.value;
   renderGuestList();
+  renderTableList();
 });
 $$('.chip').forEach(c => {
   c.addEventListener('click', () => {
@@ -1158,6 +1250,20 @@ $$('.chip').forEach(c => {
     state.filter = c.dataset.filter;
     renderGuestList();
   });
+});
+
+// ============ SIDEBAR VIEW TABS ============
+function setView(view) {
+  state.view = view;
+  $$('.tab-btn').forEach(b => b.classList.toggle('tab-active', b.dataset.view === view));
+  const showGuests = view === 'guests';
+  $('#guest-list').style.display = showGuests ? '' : 'none';
+  $('#table-list').style.display = showGuests ? 'none' : '';
+  $('#guest-filters').style.display = showGuests ? '' : 'none';
+  $('#search').placeholder = showGuests ? 'Buscar invitado...' : 'Buscar mesa...';
+}
+$$('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => setView(btn.dataset.view));
 });
 
 // ============ EXCEL IMPORT ============
@@ -1247,10 +1353,10 @@ $('#btn-menu').addEventListener('click', () => {
 $('#sidebar-backdrop').addEventListener('click', () => {
   document.body.classList.remove('sidebar-open');
 });
-// Close drawer when a guest card is clicked on mobile
+// Close drawer when a guest card or table card is clicked on mobile
 document.addEventListener('click', (e) => {
   if (window.innerWidth > 760) return;
-  if (e.target.closest('.guest-card')) {
+  if (e.target.closest('.guest-card') || e.target.closest('.table-card')) {
     setTimeout(() => document.body.classList.remove('sidebar-open'), 100);
   }
 });

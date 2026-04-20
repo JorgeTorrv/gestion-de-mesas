@@ -27,6 +27,7 @@ function load() {
       };
       // Backward-compat: ensure confirmed field exists on older records
       for (const g of data.guests) if (g.confirmed === undefined) g.confirmed = 0;
+      for (const t of data.tables) if (!t.shape) t.shape = 'circle';
     } catch (err) {
       console.error('Error leyendo DB JSON, arrancando vacio:', err.message);
     }
@@ -68,7 +69,7 @@ export const queries = {
     get: (id) => data.tables.find(t => t.id === id) || null
   },
   createTable: {
-    run: (name, position_x, position_y, capacity) => {
+    run: (name, position_x, position_y, capacity, shape = 'circle') => {
       const id = nextTableId();
       data.tables.push({
         id,
@@ -76,6 +77,7 @@ export const queries = {
         position_x: Number(position_x) || 0,
         position_y: Number(position_y) || 0,
         capacity: Number(capacity) || 10,
+        shape: shape === 'square' ? 'square' : 'circle',
         created_at: nowISO()
       });
       save();
@@ -83,13 +85,14 @@ export const queries = {
     }
   },
   updateTable: {
-    run: (name, position_x, position_y, capacity, id) => {
+    run: (name, position_x, position_y, capacity, id, shape) => {
       const t = data.tables.find(x => x.id === id);
       if (!t) return;
       t.name = name;
       t.position_x = Number(position_x) || 0;
       t.position_y = Number(position_y) || 0;
       t.capacity = Number(capacity) || 10;
+      if (shape !== undefined) t.shape = shape === 'square' ? 'square' : 'circle';
       save();
     }
   },
@@ -230,6 +233,7 @@ export const queries = {
       position_x: Number(t.position_x) || 0,
       position_y: Number(t.position_y) || 0,
       capacity: Number(t.capacity) || 10,
+      shape: t.shape === 'square' ? 'square' : 'circle',
       created_at: t.created_at || nowISO()
     }));
     data.guests = payload.guests.map(g => ({
