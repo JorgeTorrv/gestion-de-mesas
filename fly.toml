@@ -1,0 +1,31 @@
+# fly.toml — configuracion para Fly.io
+# El nombre "app" debe ser unico globalmente; se genera al correr `fly launch`.
+# Si cambias el nombre, actualiza tambien la URL que vas a compartir.
+
+app = "gestion-de-mesas"
+primary_region = "mia"   # Miami (bajo ping desde Mexico). Cambialo si lo usaras desde otra region.
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  DATA_DIR = "/data"
+
+# Volumen persistente: aqui vive data/mesas.json entre deploys
+[[mounts]]
+  source = "mesas_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # La maquina se apaga sola cuando no hay trafico (ahorra horas gratuitas)
+  # y se levanta automaticamente en el primer request (~2-4s).
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
