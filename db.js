@@ -1,275 +1,328 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import pg from 'pg';
+const { Pool } = pg;
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const dataDir = process.env.DATA_DIR || join(__dirname, 'data');
-if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
-const dbFile = join(dataDir, 'mesas.json');
-
-let data = { tables: [], guests: [], seq: { table: 0, guest: 0 }, settings: { event_name: '' } };
-
-function load() {
-  if (existsSync(dbFile)) {
-    try {
-      const raw = readFileSync(dbFile, 'utf8');
-      const parsed = JSON.parse(raw);
-      data = {
-        tables: parsed.tables || [],
-        guests: parsed.guests || [],
-        seq: parsed.seq || {
-          table: Math.max(0, ...(parsed.tables || []).map(t => t.id)),
-          guest: Math.max(0, ...(parsed.guests || []).map(g => g.id))
-        },
-        settings: parsed.settings && typeof parsed.settings === 'object'
-          ? { event_name: String(parsed.settings.event_name || '') }
-          : { event_name: '' }
-      };
-      // Backward-compat: ensure confirmed field exists on older records
-      for (const g of data.guests) if (g.confirmed === undefined) g.confirmed = 0;
-      for (const t of data.tables) if (!t.shape) t.shape = 'circle';
-    } catch (err) {
-      console.error('Error leyendo DB JSON, arrancando vacio:', err.message);
-    }
-  }
-}
-
-let saveTimer = null;
-let saving = false;
-function persist() {
-  if (saving) { saveTimer = saveTimer || setTimeout(persist, 50); return; }
-  saving = true;
-  try {
-    const tmp = dbFile + '.tmp';
-    writeFileSync(tmp, JSON.stringify(data, null, 2));
-    renameSync(tmp, dbFile);
-  } finally {
-    saving = false;
-    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  }
-}
-
-function save() {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(persist, 30);
-}
-
-load();
-
-const nextTableId = () => (++data.seq.table);
-const nextGuestId = () => (++data.seq.guest);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('localhost') ? false : { rejectUnauthorized: false }
+});
 
 function nowISO() { return new Date().toISOString(); }
 
+function normalizeTable(row) {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    position_x: Number(row.position_x) || 0,
+    position_y: Number(row.position_y) || 0,
+    capacity: Number(row.capacity) || 10,
+    shape: row.shape === 'square' ? 'square' : 'circle',
+    created_at: row.created_at || ''
+  };
+}
+
+function normalizeGuest(row) {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    phone: row.phone || null,
+    email: row.email || null,
+    extra_info: row.extra_info || null,
+    table_id: row.table_id != null ? Number(row.table_id) : null,
+    parent_id: row.parent_id != null ? Number(row.parent_id) : null,
+    is_plus_one: row.is_plus_one ? 1 : 0,
+    confirmed: row.confirmed ? 1 : 0,
+    created_at: row.created_at || ''
+  };
+}
+
+export async function initSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mesas_tables (
+      id        SERIAL PRIMARY KEY,
+      name      TEXT    NOT NULL,
+      position_x REAL   NOT NULL DEFAULT 0,
+      position_y REAL   NOT NULL DEFAULT 0,
+      capacity  INTEGER NOT NULL DEFAULT 10,
+      shape     TEXT    NOT NULL DEFAULT 'circle',
+      created_at TEXT   NOT NULL DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS mesas_guests (
+      id          SERIAL  PRIMARY KEY,
+      name        TEXT    NOT NULL,
+      phone       TEXT,
+      email       TEXT,
+      extra_info  TEXT,
+      table_id    INTEGER,
+      parent_id   INTEGER,
+      is_plus_one INTEGER NOT NULL DEFAULT 0,
+      confirmed   INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT    NOT NULL DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS mesas_settings (
+      id         INTEGER PRIMARY KEY DEFAULT 1,
+      event_name TEXT    NOT NULL DEFAULT ''
+    );
+    INSERT INTO mesas_settings(id, event_name) VALUES(1, '') ON CONFLICT DO NOTHING;
+  `);
+}
+
 export const queries = {
+
   listTables: {
-    all: () => [...data.tables].sort((a, b) => a.id - b.id)
+    all: async () => {
+      const { rows } = await pool.query('SELECT * FROM mesas_tables ORDER BY id ASC');
+      return rows.map(normalizeTable);
+    }
   },
+
   getTable: {
-    get: (id) => data.tables.find(t => t.id === id) || null
+    get: async (id) => {
+      const { rows } = await pool.query('SELECT * FROM mesas_tables WHERE id=$1', [Number(id)]);
+      return rows[0] ? normalizeTable(rows[0]) : null;
+    }
   },
+
   createTable: {
-    run: (name, position_x, position_y, capacity, shape = 'circle') => {
-      const id = nextTableId();
-      data.tables.push({
-        id,
-        name,
-        position_x: Number(position_x) || 0,
-        position_y: Number(position_y) || 0,
-        capacity: Number(capacity) || 10,
-        shape: shape === 'square' ? 'square' : 'circle',
-        created_at: nowISO()
-      });
-      save();
-      return { lastInsertRowid: id };
+    run: async (name, position_x, position_y, capacity, shape = 'circle') => {
+      const { rows } = await pool.query(
+        `INSERT INTO mesas_tables(name, position_x, position_y, capacity, shape, created_at)
+         VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+        [name, Number(position_x) || 0, Number(position_y) || 0,
+         Number(capacity) || 10, shape === 'square' ? 'square' : 'circle', nowISO()]
+      );
+      return { lastInsertRowid: rows[0].id };
     }
   },
+
   updateTable: {
-    run: (name, position_x, position_y, capacity, id, shape) => {
-      const t = data.tables.find(x => x.id === id);
-      if (!t) return;
-      t.name = name;
-      t.position_x = Number(position_x) || 0;
-      t.position_y = Number(position_y) || 0;
-      t.capacity = Number(capacity) || 10;
-      if (shape !== undefined) t.shape = shape === 'square' ? 'square' : 'circle';
-      save();
+    run: async (name, position_x, position_y, capacity, id, shape) => {
+      await pool.query(
+        `UPDATE mesas_tables SET name=$1, position_x=$2, position_y=$3, capacity=$4, shape=$5 WHERE id=$6`,
+        [name, Number(position_x) || 0, Number(position_y) || 0,
+         Number(capacity) || 10, shape === 'square' ? 'square' : 'circle', Number(id)]
+      );
     }
   },
+
   updateTablePosition: {
-    run: (position_x, position_y, id) => {
-      const t = data.tables.find(x => x.id === id);
-      if (!t) return;
-      t.position_x = Number(position_x) || 0;
-      t.position_y = Number(position_y) || 0;
-      save();
+    run: async (position_x, position_y, id) => {
+      await pool.query(
+        `UPDATE mesas_tables SET position_x=$1, position_y=$2 WHERE id=$3`,
+        [Number(position_x) || 0, Number(position_y) || 0, Number(id)]
+      );
     }
   },
+
   deleteTable: {
-    run: (id) => {
-      data.tables = data.tables.filter(t => t.id !== id);
-      save();
+    run: async (id) => {
+      await pool.query('DELETE FROM mesas_tables WHERE id=$1', [Number(id)]);
     }
   },
+
   unassignGuestsFromTable: {
-    run: (id) => {
-      for (const g of data.guests) if (g.table_id === id) g.table_id = null;
-      save();
+    run: async (id) => {
+      await pool.query('UPDATE mesas_guests SET table_id=NULL WHERE table_id=$1', [Number(id)]);
     }
   },
 
   listGuests: {
-    all: () => [...data.guests].sort((a, b) => {
-      if (a.is_plus_one !== b.is_plus_one) return a.is_plus_one - b.is_plus_one;
-      return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
-    })
+    all: async () => {
+      const { rows } = await pool.query(
+        `SELECT * FROM mesas_guests ORDER BY is_plus_one ASC, name ASC`
+      );
+      return rows.map(normalizeGuest);
+    }
   },
+
   getGuest: {
-    get: (id) => data.guests.find(g => g.id === id) || null
+    get: async (id) => {
+      const { rows } = await pool.query('SELECT * FROM mesas_guests WHERE id=$1', [Number(id)]);
+      return rows[0] ? normalizeGuest(rows[0]) : null;
+    }
   },
+
   getGuestsByTable: {
-    all: (id) => data.guests.filter(g => g.table_id === id).sort((a, b) => {
-      if (a.is_plus_one !== b.is_plus_one) return a.is_plus_one - b.is_plus_one;
-      return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
-    })
+    all: async (id) => {
+      const { rows } = await pool.query(
+        `SELECT * FROM mesas_guests WHERE table_id=$1 ORDER BY is_plus_one ASC, name ASC`,
+        [Number(id)]
+      );
+      return rows.map(normalizeGuest);
+    }
   },
+
   getChildren: {
-    all: (id) => data.guests.filter(g => g.parent_id === id).sort((a, b) =>
-      a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
-    )
+    all: async (id) => {
+      const { rows } = await pool.query(
+        `SELECT * FROM mesas_guests WHERE parent_id=$1 ORDER BY name ASC`,
+        [Number(id)]
+      );
+      return rows.map(normalizeGuest);
+    }
   },
+
   createGuest: {
-    run: (name, phone, email, extra_info, table_id, parent_id, is_plus_one, confirmed = 0) => {
-      const id = nextGuestId();
-      data.guests.push({
-        id,
-        name,
-        phone: phone || null,
-        email: email || null,
-        extra_info: extra_info || null,
-        table_id: table_id ?? null,
-        parent_id: parent_id ?? null,
-        is_plus_one: is_plus_one ? 1 : 0,
-        confirmed: confirmed ? 1 : 0,
-        created_at: nowISO()
-      });
-      save();
-      return { lastInsertRowid: id };
+    run: async (name, phone, email, extra_info, table_id, parent_id, is_plus_one, confirmed = 0) => {
+      const { rows } = await pool.query(
+        `INSERT INTO mesas_guests(name,phone,email,extra_info,table_id,parent_id,is_plus_one,confirmed,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [name, phone || null, email || null, extra_info || null,
+         table_id ?? null, parent_id ?? null,
+         is_plus_one ? 1 : 0, confirmed ? 1 : 0, nowISO()]
+      );
+      return { lastInsertRowid: rows[0].id };
     }
   },
+
   updateGuest: {
-    run: (name, phone, email, extra_info, id) => {
-      const g = data.guests.find(x => x.id === id);
-      if (!g) return;
-      g.name = name;
-      g.phone = phone || null;
-      g.email = email || null;
-      g.extra_info = extra_info || null;
-      save();
+    run: async (name, phone, email, extra_info, id) => {
+      await pool.query(
+        `UPDATE mesas_guests SET name=$1, phone=$2, email=$3, extra_info=$4 WHERE id=$5`,
+        [name, phone || null, email || null, extra_info || null, Number(id)]
+      );
     }
   },
+
   assignGuest: {
-    run: (table_id, id) => {
-      const g = data.guests.find(x => x.id === id);
-      if (!g) return;
-      g.table_id = table_id ?? null;
-      save();
+    run: async (table_id, id) => {
+      await pool.query(
+        `UPDATE mesas_guests SET table_id=$1 WHERE id=$2`,
+        [table_id ?? null, Number(id)]
+      );
     }
   },
+
   setConfirmed: {
-    run: (confirmed, id) => {
-      const g = data.guests.find(x => x.id === id);
-      if (!g) return;
-      g.confirmed = confirmed ? 1 : 0;
-      save();
+    run: async (confirmed, id) => {
+      await pool.query(
+        `UPDATE mesas_guests SET confirmed=$1 WHERE id=$2`,
+        [confirmed ? 1 : 0, Number(id)]
+      );
     }
   },
+
   deleteGuest: {
-    run: (id) => {
-      const removeIds = new Set([id]);
-      // cascade plus-ones
-      for (const g of data.guests) if (g.parent_id === id) removeIds.add(g.id);
-      data.guests = data.guests.filter(g => !removeIds.has(g.id));
-      save();
+    run: async (id) => {
+      await pool.query(
+        'DELETE FROM mesas_guests WHERE id=$1 OR parent_id=$1',
+        [Number(id)]
+      );
     }
   },
+
   countTableGuests: {
-    get: (id) => ({ c: data.guests.filter(g => g.table_id === id).length })
-  },
-  clearAll: () => {
-    data.tables = [];
-    data.guests = [];
-    data.seq = { table: 0, guest: 0 };
-    data.settings = { event_name: '' };
-    save();
-  },
-  getSettings: {
-    get: () => ({ ...data.settings })
-  },
-  updateSettings: {
-    run: (patch) => {
-      if (patch && typeof patch === 'object') {
-        if ('event_name' in patch) data.settings.event_name = String(patch.event_name || '');
-      }
-      save();
-      return { ...data.settings };
+    get: async (id) => {
+      const { rows } = await pool.query(
+        'SELECT COUNT(*) AS c FROM mesas_guests WHERE table_id=$1',
+        [Number(id)]
+      );
+      return { c: Number(rows[0].c) };
     }
   },
-  exportAll: () => ({
-    version: 1,
-    exported_at: nowISO(),
-    tables: data.tables,
-    guests: data.guests,
-    seq: data.seq,
-    settings: data.settings
-  }),
-  replaceAll: (payload) => {
+
+  clearAll: async () => {
+    await pool.query('DELETE FROM mesas_guests');
+    await pool.query('DELETE FROM mesas_tables');
+    await pool.query(`SELECT setval('mesas_tables_id_seq', 1, false)`);
+    await pool.query(`SELECT setval('mesas_guests_id_seq', 1, false)`);
+    await pool.query(`UPDATE mesas_settings SET event_name='' WHERE id=1`);
+  },
+
+  getSettings: {
+    get: async () => {
+      const { rows } = await pool.query('SELECT * FROM mesas_settings WHERE id=1');
+      return rows[0] ? { event_name: rows[0].event_name || '' } : { event_name: '' };
+    }
+  },
+
+  updateSettings: {
+    run: async (patch) => {
+      if (patch && typeof patch === 'object' && 'event_name' in patch) {
+        await pool.query(
+          'UPDATE mesas_settings SET event_name=$1 WHERE id=1',
+          [String(patch.event_name || '')]
+        );
+      }
+      const { rows } = await pool.query('SELECT * FROM mesas_settings WHERE id=1');
+      return { event_name: rows[0]?.event_name || '' };
+    }
+  },
+
+  exportAll: async () => {
+    const { rows: tables }   = await pool.query('SELECT * FROM mesas_tables ORDER BY id');
+    const { rows: guests }   = await pool.query('SELECT * FROM mesas_guests ORDER BY id');
+    const { rows: settings } = await pool.query('SELECT * FROM mesas_settings WHERE id=1');
+    const maxTableId = tables.length ? Math.max(...tables.map(t => Number(t.id))) : 0;
+    const maxGuestId = guests.length ? Math.max(...guests.map(g => Number(g.id))) : 0;
+    return {
+      version: 1,
+      exported_at: nowISO(),
+      tables: tables.map(normalizeTable),
+      guests: guests.map(normalizeGuest),
+      seq: { table: maxTableId, guest: maxGuestId },
+      settings: settings[0] ? { event_name: settings[0].event_name || '' } : { event_name: '' }
+    };
+  },
+
+  replaceAll: async (payload) => {
     if (!payload || !Array.isArray(payload.tables) || !Array.isArray(payload.guests)) {
       throw new Error('Formato invalido');
     }
-    data.tables = payload.tables.map(t => ({
-      id: Number(t.id),
-      name: String(t.name || 'Mesa'),
-      position_x: Number(t.position_x) || 0,
-      position_y: Number(t.position_y) || 0,
-      capacity: Number(t.capacity) || 10,
-      shape: t.shape === 'square' ? 'square' : 'circle',
-      created_at: t.created_at || nowISO()
-    }));
-    data.guests = payload.guests.map(g => ({
-      id: Number(g.id),
-      name: String(g.name || ''),
-      phone: g.phone || null,
-      email: g.email || null,
-      extra_info: g.extra_info || null,
-      table_id: g.table_id ? Number(g.table_id) : null,
-      parent_id: g.parent_id ? Number(g.parent_id) : null,
-      is_plus_one: g.is_plus_one ? 1 : 0,
-      confirmed: g.confirmed ? 1 : 0,
-      created_at: g.created_at || nowISO()
-    }));
-    data.seq = payload.seq && typeof payload.seq === 'object' ? {
-      table: Number(payload.seq.table) || Math.max(0, ...data.tables.map(t => t.id)),
-      guest: Number(payload.seq.guest) || Math.max(0, ...data.guests.map(g => g.id))
-    } : {
-      table: Math.max(0, ...data.tables.map(t => t.id)),
-      guest: Math.max(0, ...data.guests.map(g => g.id))
-    };
-    data.settings = payload.settings && typeof payload.settings === 'object'
-      ? { event_name: String(payload.settings.event_name || '') }
-      : { event_name: '' };
-    persist();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM mesas_guests');
+      await client.query('DELETE FROM mesas_tables');
+
+      for (const t of payload.tables) {
+        await client.query(
+          `INSERT INTO mesas_tables(id,name,position_x,position_y,capacity,shape,created_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7)`,
+          [Number(t.id), String(t.name || 'Mesa'),
+           Number(t.position_x) || 0, Number(t.position_y) || 0,
+           Number(t.capacity) || 10,
+           t.shape === 'square' ? 'square' : 'circle',
+           t.created_at || nowISO()]
+        );
+      }
+
+      for (const g of payload.guests) {
+        await client.query(
+          `INSERT INTO mesas_guests(id,name,phone,email,extra_info,table_id,parent_id,is_plus_one,confirmed,created_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [Number(g.id), String(g.name || ''),
+           g.phone || null, g.email || null, g.extra_info || null,
+           g.table_id ? Number(g.table_id) : null,
+           g.parent_id ? Number(g.parent_id) : null,
+           g.is_plus_one ? 1 : 0, g.confirmed ? 1 : 0,
+           g.created_at || nowISO()]
+        );
+      }
+
+      const maxTableId = payload.tables.length ? Math.max(...payload.tables.map(t => Number(t.id))) : 0;
+      const maxGuestId = payload.guests.length ? Math.max(...payload.guests.map(g => Number(g.id))) : 0;
+      await client.query(`SELECT setval('mesas_tables_id_seq', $1)`, [Math.max(1, maxTableId)]);
+      await client.query(`SELECT setval('mesas_guests_id_seq', $1)`, [Math.max(1, maxGuestId)]);
+
+      if (payload.settings) {
+        await client.query(
+          'UPDATE mesas_settings SET event_name=$1 WHERE id=1',
+          [String(payload.settings.event_name || '')]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 };
 
-// Keep transaction-like helper (for bulk insert in server.js)
 export function transaction(fn) {
-  return (...args) => {
-    const result = fn(...args);
-    // single save at end (inside functions we already save; but force flush)
-    persist();
-    return result;
-  };
+  return async (...args) => fn(...args);
 }
 
 export default { queries };

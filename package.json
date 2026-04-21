@@ -6,12 +6,13 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --env-file=.env --watch server.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^4.21.0"
+    "express": "^4.21.0",
+    "pg": "^8.20.0"
   }
 }
