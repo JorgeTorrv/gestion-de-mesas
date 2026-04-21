@@ -147,7 +147,7 @@ function connectSSE() {
   function open() {
     try { es?.close(); } catch {}
     es = new EventSource('/api/events');
-    es.onopen = () => { backoff = 1000; };
+    es.onopen = () => { backoff = 1000; if (_hasBooted) scheduleRefresh(); };
     es.onmessage = (e) => {
       try {
         const { type, payload } = JSON.parse(e.data);

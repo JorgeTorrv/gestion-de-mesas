@@ -23,8 +23,9 @@ app.get('/api/events', (req, res) => {
   const id = String(++clientSeq);
   const client = { id, res };
   sseClients.add(client);
+  res.write(`retry: 3000\n\n`);
   res.write(`data: ${JSON.stringify({ type: 'hello', payload: { id } })}\n\n`);
-  const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 20000);
+  const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 12000);
   req.on('close', () => { clearInterval(hb); sseClients.delete(client); try { res.end(); } catch {} });
 });
 

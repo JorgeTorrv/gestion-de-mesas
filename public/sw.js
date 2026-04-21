@@ -1,6 +1,5 @@
-const CACHE = 'mesas-v2';
+const CACHE = 'seatmap-v1';
 const SHELL = [
-  './',
   './index.html',
   './styles.css',
   './app.js',
@@ -32,15 +31,35 @@ self.addEventListener('fetch', (e) => {
   if (url.pathname.startsWith('/api/')) return;
   if (url.origin !== location.origin) return;
 
+  // Navegacion (HTML): red primero, cache como fallback
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      fetch(req)
+        .then(resp => {
+          if (resp.ok) {
+            const copy = resp.clone();
+            caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+          }
+          return resp;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // Assets (CSS, JS, SVG, etc): cache primero, red como fallback
+  // Si no esta en cache y la red falla, dejamos que el navegador maneje el error
+  // (NO caer a index.html para evitar que CSS se reemplace con HTML)
   e.respondWith(
-    caches.match(req).then(hit =>
-      hit || fetch(req).then(resp => {
+    caches.match(req).then(hit => {
+      if (hit) return hit;
+      return fetch(req).then(resp => {
         if (resp.ok) {
           const copy = resp.clone();
           caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
         }
         return resp;
-      }).catch(() => caches.match('./index.html'))
-    )
+      });
+    })
   );
 });
