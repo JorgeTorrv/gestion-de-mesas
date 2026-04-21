@@ -1,7 +1,7 @@
 {
-  "name": "Gestion de Mesas",
-  "short_name": "Mesas",
-  "description": "Gestion de mesas e invitados para eventos",
+  "name": "Seatmap",
+  "short_name": "Seatmap",
+  "description": "Seatmap - Gestion de mesas e invitados para eventos",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -315,7 +315,7 @@ app.post('/api/import', async (req, res) => {
 initSchema()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`\n  Gestion de Mesas corriendo en:`);
+      console.log(`\n  Seatmap corriendo en:`);
       console.log(`    Puerto:  ${PORT}`);
       console.log(`    Local:   http://localhost:${PORT}\n`);
     });

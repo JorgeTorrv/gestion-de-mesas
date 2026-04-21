@@ -1,7 +1,7 @@
 {
-  "name": "gestion-de-mesas",
+  "name": "seatmap",
   "version": "1.0.0",
-  "description": "Sistema web de gestion de mesas e invitados para eventos",
+  "description": "Seatmap - Gestion de mesas e invitados para eventos",
   "main": "server.js",
   "type": "module",
   "scripts": {
