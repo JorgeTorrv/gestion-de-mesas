@@ -81,11 +81,12 @@ body {
 .dialog-msg { margin: 0 0 14px; font-size: 14px; line-height: 1.55; color: var(--text-2); white-space: pre-line; }
 .logo {
   width: 30px; height: 30px; border-radius: 8px;
-  background: var(--accent);
-  color: var(--on-accent);
-  display: grid; place-items: center; font-weight: 700; font-size: 11px;
-  letter-spacing: .5px;
+  display: block; object-fit: contain;
+  flex-shrink: 0;
 }
+.logo-dark { display: none; }
+html[data-theme="dark"] .logo-light { display: none; }
+html[data-theme="dark"] .logo-dark { display: block; }
 .top-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
 /* Icon button */
@@ -748,7 +749,7 @@ body.sidebar-open .sidebar-backdrop { opacity: 1; pointer-events: auto; }
   .top-actions .btn { padding: 6px 8px; min-width: 34px; justify-content: center; }
   .top-actions .btn .ico { font-size: 16px; }
   .icon-btn { width: 34px; height: 34px; }
-  .logo { width: 26px; height: 26px; font-size: 10px; }
+  .logo { width: 26px; height: 26px; }
 
   .layout {
     grid-template-columns: 1fr;
@@ -825,7 +826,7 @@ body.sidebar-open .sidebar-backdrop { opacity: 1; pointer-events: auto; }
 /* Very narrow portrait */
 @media (max-width: 480px) {
   .brand h1 { display: none; }
-  .logo { display: none; }
+  .logo { display: none !important; }
   .counts { grid-template-columns: repeat(2, 1fr); }
   .top-actions .btn { padding: 5px 7px; }
 }

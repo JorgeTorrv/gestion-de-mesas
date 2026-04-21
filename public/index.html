@@ -6,7 +6,8 @@
 <meta name="theme-color" content="#faf9f5" />
 <title>Gestion de Mesas</title>
 <link rel="manifest" href="./manifest.json" />
-<link rel="icon" type="image/svg+xml" href="./icon.svg" />
+<link rel="icon" type="image/svg+xml" href="./icon.svg" media="(prefers-color-scheme: light)" />
+<link rel="icon" type="image/svg+xml" href="./icon-dark.svg" media="(prefers-color-scheme: dark)" />
 <link rel="apple-touch-icon" href="./icon.svg" />
 <script>
   (function () {
@@ -28,7 +29,8 @@
     <button id="btn-menu" class="icon-btn only-mobile" aria-label="Menu">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
     </button>
-    <span class="logo">ME</span>
+    <img class="logo logo-light" src="./icon.svg" alt="" />
+    <img class="logo logo-dark" src="./icon-dark.svg" alt="" />
     <h1 id="app-title" title="Click para renombrar">Gestion de Mesas</h1>
   </div>
   <div class="top-actions">

@@ -1,11 +1,12 @@
-const CACHE = 'mesas-v1';
+const CACHE = 'mesas-v2';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './manifest.json',
-  './icon.svg'
+  './icon.svg',
+  './icon-dark.svg'
 ];
 
 self.addEventListener('install', (e) => {
