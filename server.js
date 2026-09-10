@@ -81,12 +81,26 @@ app.put('/api/settings', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+function tablePatchFromBody(body = {}) {
+  const patch = {};
+  if (body.name != null) patch.name = String(body.name);
+  if (body.position_x != null) patch.position_x = body.position_x;
+  if (body.position_y != null) patch.position_y = body.position_y;
+  if (body.capacity != null) patch.capacity = body.capacity;
+  if (body.shape != null) patch.shape = body.shape;
+  if (body.rotation != null) patch.rotation = body.rotation;
+  if ('color' in body) patch.color = body.color;
+  if ('seat_layout' in body) patch.seat_layout = body.seat_layout;
+  return patch;
+}
+
 app.post('/api/tables', async (req, res) => {
   try {
-    const { name, position_x = 0, position_y = 0, capacity = 10, shape = 'circle' } = req.body || {};
-    if (!name || !name.trim()) return res.status(400).json({ error: 'Nombre requerido' });
+    const patch = tablePatchFromBody(req.body);
+    if (!patch.name || !patch.name.trim()) return res.status(400).json({ error: 'Nombre requerido' });
+    patch.name = patch.name.trim();
     await pushHistory();
-    const info = await queries.createTable.run(name.trim(), position_x, position_y, capacity, shape);
+    const info = await queries.createTable.run(patch);
     res.json(await enrichTable(await queries.getTable.get(info.lastInsertRowid)));
     broadcast('state.changed', { originId: origin(req) });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -97,15 +111,9 @@ app.put('/api/tables/:id', async (req, res) => {
     const id = Number(req.params.id);
     const existing = await queries.getTable.get(id);
     if (!existing) return res.status(404).json({ error: 'Mesa no encontrada' });
-    const {
-      name = existing.name,
-      position_x = existing.position_x,
-      position_y = existing.position_y,
-      capacity = existing.capacity,
-      shape = existing.shape
-    } = req.body || {};
+    const patch = tablePatchFromBody(req.body);
     await pushHistory();
-    await queries.updateTable.run(name, position_x, position_y, capacity, id, shape);
+    await queries.updateTable.run(patch, id, existing);
     res.json(await enrichTable(await queries.getTable.get(id)));
     broadcast('state.changed', { originId: origin(req) });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -117,6 +125,25 @@ app.post('/api/tables/:id/drag', (req, res) => {
   const { position_x, position_y } = req.body || {};
   broadcast('table.drag', { id, position_x, position_y, originId: origin(req) });
   res.json({ ok: true });
+});
+
+// Live rotate (ephemeral — broadcast only, no persist)
+app.post('/api/tables/:id/spin', (req, res) => {
+  const id = Number(req.params.id);
+  const { rotation } = req.body || {};
+  broadcast('table.spin', { id, rotation, originId: origin(req) });
+  res.json({ ok: true });
+});
+
+app.patch('/api/tables/:id/rotation', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { rotation } = req.body || {};
+    await pushHistory();
+    await queries.updateTableRotation.run(rotation, id);
+    res.json({ ok: true });
+    broadcast('state.changed', { originId: origin(req) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.patch('/api/tables/:id/position', async (req, res) => {
@@ -207,14 +234,10 @@ app.post('/api/tables/bulk', async (req, res) => {
     await pushHistory();
     let created = 0;
     for (const t of tables) {
-      const name = String(t?.name || '').trim();
-      if (!name) continue;
-      await queries.createTable.run(
-        name,
-        Number(t.position_x) || 0, Number(t.position_y) || 0,
-        Number(t.capacity) || 10,
-        t.shape === 'square' ? 'square' : 'circle'
-      );
+      const patch = tablePatchFromBody(t);
+      if (!patch.name || !patch.name.trim()) continue;
+      patch.name = patch.name.trim();
+      await queries.createTable.run(patch);
       created++;
     }
     res.json({ created });

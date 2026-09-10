@@ -7,6 +7,7 @@ const state = {
   view: 'guests',
   currentGuestId: null,
   currentTableId: null,
+  selectedTableId: null,
   pendingChildren: [],
   importRows: [],
   importHeaders: [],
@@ -18,6 +19,79 @@ const state = {
   settings: { event_name: '' }
 };
 const DEFAULT_TITLE = 'Gestion de Mesas';
+const TABLE_COLORS = ['#b38138', '#4a7256', '#3f6b8c', '#8c4a6b', '#7a5c9e', '#c05f3a', '#4b7a7a', '#5a6b3f'];
+
+// ============ SEAT GEOMETRY ============
+const SEAT_GAP = 34;   // spacing between adjacent seats on an edge
+const RECT_PAD = 30;   // border inset from the seat rows
+const RECT_MIN_W = 128;
+const RECT_MIN_H = 108;
+const RECT_MAX = 560;
+const SEAT_OFF = 10;   // how far a seat sits outside the table border
+
+function circleGeometry(count, capacity) {
+  const cap = Math.max(count, Number(capacity) || 10, 1);
+  const base = Math.max(140, Math.min(340, 140 + cap * 10));
+  const seats = [];
+  // number 1 at the top (12 o'clock), then clockwise
+  for (let i = 0; i < cap; i++) {
+    const angle = (i / cap) * Math.PI * 2 - Math.PI / 2;
+    const r = base / 2 + 8;
+    seats.push({ x: base / 2 + r * Math.cos(angle), y: base / 2 + r * Math.sin(angle), n: i + 1 });
+  }
+  return { w: base, h: base, shape: 'circle', seats, capacity: cap };
+}
+
+function defaultLayoutFor(capacity) {
+  const cap = Math.max(2, Number(capacity) || 10);
+  const side = Math.max(1, Math.round((cap - 2) / 2));
+  return { head: 1, side, corners: false, drop: 0 };
+}
+
+// Rectangular: head seats per short end (x2), side seats per long edge (x2),
+// optional 4 corner seats. `drop` removes trailing slots from the BOTTOM edge
+// only — the remaining seats keep the same x as the TOP edge (stay aligned).
+function rectGeometry(count, layout) {
+  const L = layout || defaultLayoutFor(10);
+  const head = Math.max(0, L.head | 0);
+  const side = Math.max(0, L.side | 0);
+  const corners = !!L.corners;
+  const drop = Math.max(0, Math.min(side, L.drop | 0));
+
+  const baseCap = Math.max(1, head * 2 + side * 2 + (corners ? 4 : 0) - drop);
+  // Grow the long edges if more guests than seats.
+  let effSide = side;
+  if (count > baseCap) effSide = side + Math.ceil((count - baseCap) / 2);
+
+  const cols = Math.max(effSide, 1);
+  const rows = Math.max(head, 1);
+  const w = Math.max(RECT_MIN_W, Math.min(RECT_MAX, cols * SEAT_GAP + 2 * RECT_PAD));
+  const h = Math.max(RECT_MIN_H, Math.min(RECT_MAX, rows * SEAT_GAP + 2 * RECT_PAD));
+
+  const along = (k, total, length) => (length / (total + 1)) * (k + 1);
+  const seats = [];
+  // Numbering walks the perimeter starting at the LEFT cabecera (head), going
+  // down that head, along the bottom, up the right head, back across the top.
+  for (let k = 0; k < head; k++)                    seats.push({ x: -SEAT_OFF,      y: along(k, head, h) });          // left head  T->B
+  if (corners)                                      seats.push({ x: -SEAT_OFF,      y: h + SEAT_OFF });               // bottom-left corner
+  for (let k = 0; k < effSide - drop; k++)          seats.push({ x: along(k, effSide, w), y: h + SEAT_OFF });         // bottom     L->R
+  if (corners)                                      seats.push({ x: w + SEAT_OFF,   y: h + SEAT_OFF });               // bottom-right corner
+  for (let k = head - 1; k >= 0; k--)               seats.push({ x: w + SEAT_OFF,   y: along(k, head, h) });          // right head B->T
+  if (corners)                                      seats.push({ x: w + SEAT_OFF,   y: -SEAT_OFF });                  // top-right corner
+  for (let k = effSide - 1; k >= 0; k--)            seats.push({ x: along(k, effSide, w), y: -SEAT_OFF });            // top        R->L
+  if (corners)                                      seats.push({ x: -SEAT_OFF,      y: -SEAT_OFF });                  // top-left corner
+
+  seats.forEach((s, i) => { s.n = i + 1; });
+  return { w, h, shape: 'square', seats, capacity: baseCap };
+}
+
+function tableGeometry(t) {
+  const count = t.guests ? t.guests.length : 0;
+  if (t.shape === 'square') {
+    return rectGeometry(count, t.seat_layout || defaultLayoutFor(t.capacity));
+  }
+  return circleGeometry(count, t.capacity);
+}
 const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 1.8;
 const ZOOM_STEP = 0.1;
@@ -141,6 +215,21 @@ function applyRemoteDrag({ id, position_x, position_y }) {
   node._remoteTimer = setTimeout(() => node.classList.remove('remote-moving'), 260);
 }
 
+function applyRemoteSpin({ id, rotation }) {
+  const rot = ((Number(rotation) % 360) + 360) % 360 || 0;
+  const t = state.tables.find(x => x.id === id);
+  if (t) t.rotation = rot;
+  const rotor = document.querySelector(`.table-node[data-table-id="${id}"] .table-rotor`);
+  if (!rotor) return;
+  rotor.classList.add('remote-moving');
+  rotor.style.transform = `rotate(${rot}deg)`;
+  rotor.style.setProperty('--rot', rot + 'deg');
+  const center = rotor.querySelector('.table-center');
+  if (center) center.style.transform = `translate(-50%,-50%) rotate(${-rot}deg)`;
+  clearTimeout(rotor._remoteTimer);
+  rotor._remoteTimer = setTimeout(() => rotor.classList.remove('remote-moving'), 260);
+}
+
 function connectSSE() {
   let es = null;
   let backoff = 1000;
@@ -155,6 +244,7 @@ function connectSSE() {
         if (payload?.originId && payload.originId === myClientId) return;
         if (type === 'state.changed') scheduleRefresh();
         else if (type === 'table.drag') applyRemoteDrag(payload);
+        else if (type === 'table.spin') applyRemoteSpin(payload);
       } catch {}
     };
     es.onerror = () => {
@@ -301,16 +391,63 @@ function renderGuestList() {
 }
 
 // ============ ZOOM / CANVAS SIZE / EDGE SCROLL ============
+// Axis-aligned bounding box of a table (seat overhang + rotation) for layout math.
 function tableDim(t) {
-  const count = t.guests.length;
-  const cap = Math.max(count, Number(t.capacity) || 10);
-  const base = Math.max(140, Math.min(340, 140 + cap * 10));
-  if (t.shape === 'square') {
-    return { w: Math.round(base * 1.3), h: Math.round(base * 0.7), base };
-  }
-  return { w: base, h: base, base };
+  const g = tableGeometry(t);
+  const pad = SEAT_OFF + 16;
+  const bw = g.w + pad * 2;
+  const bh = g.h + pad * 2;
+  const rot = (Number(t.rotation) || 0) * Math.PI / 180;
+  const c = Math.abs(Math.cos(rot)), s = Math.abs(Math.sin(rot));
+  return {
+    w: Math.round(bw * c + bh * s),
+    h: Math.round(bw * s + bh * c),
+    base: Math.max(bw, bh)
+  };
 }
 function tableSize(t) { const { w, h } = tableDim(t); return Math.max(w, h); }
+
+// ============ TABLE COLOR (tonal) ============
+function hexToHsl(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return null;
+  const int = parseInt(m[1], 16);
+  const r = ((int >> 16) & 255) / 255, g = ((int >> 8) & 255) / 255, b = (int & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let h = 0, s = 0; const l = (max + min) / 2;
+  if (d) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+  }
+  return { h, s: s * 100, l: l * 100 };
+}
+const _hsl = (h, s, l) =>
+  `hsl(${h.toFixed(0)} ${Math.max(0, Math.min(100, s)).toFixed(0)}% ${Math.max(0, Math.min(100, l)).toFixed(0)}%)`;
+
+function applyTableColor(node, hex) {
+  const base = hexToHsl(hex);
+  if (!base) return;
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  const { h, s } = base;
+  const set = (k, v) => node.style.setProperty(k, v);
+  if (dark) {
+    set('--tbl-fill-1', _hsl(h, s * 0.55, 27));
+    set('--tbl-fill-2', _hsl(h, s * 0.62, 17));
+    set('--tbl-border', _hsl(h, s * 0.52, 48));
+    set('--tbl-ink',    _hsl(h, s * 0.40, 84));
+    set('--tbl-seat',   _hsl(h, s * 0.50, 58));
+  } else {
+    set('--tbl-fill-1', _hsl(h, s * 0.70, 94));
+    set('--tbl-fill-2', _hsl(h, s * 0.78, 83));
+    set('--tbl-border', _hsl(h, s * 0.58, 55));
+    set('--tbl-ink',    _hsl(h, s * 0.70, 31));
+    set('--tbl-seat',   _hsl(h, s * 0.55, 50));
+  }
+  node.classList.add('has-color');
+}
 
 function updateCanvasSize(extra) {
   const wrap = $('.canvas-wrap');
@@ -435,25 +572,6 @@ function edgeScrollTick() {
 }
 
 // ============ CANVAS ============
-function seatPosition(shape, w, h, i, seats) {
-  if (shape === 'square') {
-    const offset = 6;
-    const perimeter = 2 * w + 2 * h;
-    const startDist = w / 2;
-    const d = (startDist + (i / seats) * perimeter) % perimeter;
-    if (d < w)           return { x: d,                     y: -offset };
-    if (d < w + h)       return { x: w + offset,            y: d - w };
-    if (d < 2*w + h)     return { x: w - (d - w - h),       y: h + offset };
-    return                      { x: -offset,               y: h - (d - 2*w - h) };
-  }
-  const angle = (i / seats) * Math.PI * 2 - Math.PI / 2;
-  const r = w / 2 + 6;
-  return {
-    x: w / 2 + r * Math.cos(angle),
-    y: h / 2 + r * Math.sin(angle)
-  };
-}
-
 function renderCanvas() {
   const canvas = $('#canvas');
   canvas.innerHTML = '';
@@ -461,50 +579,82 @@ function renderCanvas() {
 
   state.tables.forEach(t => {
     const count = t.guests.length;
-    const baseCap = Number(t.capacity) || 10;
+    const g = tableGeometry(t);
+    const baseCap = g.capacity;
     const displayCap = Math.max(count, baseCap);
     const overBase = count > baseCap;
-    const shape = t.shape === 'square' ? 'square' : 'circle';
-    const { w, h } = tableDim(t);
+    const rot = Number(t.rotation) || 0;
+    const seatCount = Math.max(g.seats.length, displayCap);
 
     const node = document.createElement('div');
-    node.className = 'table-node';
+    node.className = 'table-node' + (t.id === state.selectedTableId ? ' selected' : '');
     node.dataset.tableId = t.id;
     node.style.left = `${t.position_x}px`;
     node.style.top = `${t.position_y}px`;
+    if (t.color) applyTableColor(node, t.color);
 
-    node.innerHTML = `
-      <div class="table-circle ${shape === 'square' ? 'square' : ''}" style="width:${w}px;height:${h}px;">
-        <div class="table-center">
-          <div class="table-count ${overBase ? 'over' : ''}">${count}</div>
-          <div class="table-label">de ${displayCap}</div>
-        </div>
-      </div>
-      <div class="table-name">${esc(t.name)}</div>
-    `;
+    const rotor = document.createElement('div');
+    rotor.className = 'table-rotor' + (t.shape === 'square' ? ' square' : '');
+    rotor.style.width = g.w + 'px';
+    rotor.style.height = g.h + 'px';
+    rotor.style.setProperty('--rot', rot + 'deg');
+    rotor.style.transform = `rotate(${rot}deg)`;
 
-    const circle = node.querySelector('.table-circle');
-    const seats = displayCap;
-    for (let i = 0; i < seats; i++) {
-      const { x, y } = seatPosition(shape, w, h, i, seats);
+    const shapeEl = document.createElement('div');
+    shapeEl.className = 'table-shape';
+    rotor.appendChild(shapeEl);
+
+    const cxr = g.w / 2, cyr = g.h / 2;
+    for (let i = 0; i < seatCount; i++) {
+      const s = g.seats[i] || g.seats[g.seats.length - 1] || { x: g.w / 2, y: g.h + SEAT_OFF, n: i + 1 };
       const dot = document.createElement('div');
       let cls = 'seat';
-      const isOccupied = i < count;
-      if (isOccupied) cls += ' occupied';
+      const occ = i < count;
+      if (occ) cls += ' occupied';
       if (i >= baseCap) cls += ' over-base';
       dot.className = cls;
-      dot.style.left = x + 'px';
-      dot.style.top = y + 'px';
-      if (isOccupied) {
-        const guest = t.guests[i];
-        dot.dataset.name = guest?.name || '';
+      dot.style.left = s.x + 'px';
+      dot.style.top = s.y + 'px';
+      if (occ) {
+        dot.dataset.name = t.guests[i]?.name || '';
         attachSeatTooltip(dot);
       }
-      circle.appendChild(dot);
+      rotor.appendChild(dot);
+
+      const num = document.createElement('div');
+      num.className = 'seat-num';
+      num.textContent = s.n ?? (i + 1);
+      const dx = s.x - cxr, dy = s.y - cyr;
+      const len = Math.hypot(dx, dy) || 1;
+      num.style.left = (s.x + (dx / len) * 13) + 'px';
+      num.style.top = (s.y + (dy / len) * 13) + 'px';
+      num.style.transform = `translate(-50%,-50%) rotate(${-rot}deg)`;
+      rotor.appendChild(num);
     }
+
+    const center = document.createElement('div');
+    center.className = 'table-center';
+    center.style.transform = `translate(-50%,-50%) rotate(${-rot}deg)`;
+    center.innerHTML =
+      `<div class="table-count ${overBase ? 'over' : ''}">${count}</div>` +
+      `<div class="table-label">de ${displayCap}</div>`;
+    rotor.appendChild(center);
+    node.appendChild(rotor);
+
+    const handle = document.createElement('div');
+    handle.className = 'rotate-handle';
+    handle.title = 'Girar mesa (Shift: libre)';
+    handle.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
+    node.appendChild(handle);
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'table-name';
+    nameEl.textContent = t.name;
+    node.appendChild(nameEl);
 
     canvas.appendChild(node);
     attachTableInteractions(node, t);
+    attachRotateHandle(handle, node, t);
   });
 }
 
@@ -577,9 +727,33 @@ function broadcastTableDrag(id, x, y) {
   }).catch(() => {});
 }
 
+let _lastSpinBroadcast = 0;
+function broadcastTableSpin(id, rotation) {
+  if (!myClientId) return;
+  const now = performance.now();
+  if (now - _lastSpinBroadcast < 33) return;
+  _lastSpinBroadcast = now;
+  fetch(`/api/tables/${id}/spin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-client-id': myClientId },
+    body: JSON.stringify({ rotation }),
+    keepalive: true
+  }).catch(() => {});
+}
+
+function selectTable(id) {
+  state.selectedTableId = id;
+  $$('.table-node').forEach(n => n.classList.toggle('selected', Number(n.dataset.tableId) === id));
+}
+function clearTableSelection() {
+  if (state.selectedTableId == null) return;
+  state.selectedTableId = null;
+  $$('.table-node.selected').forEach(n => n.classList.remove('selected'));
+}
+
 function attachTableInteractions(node, table) {
   enableDragOrClick(node, {
-    onClick: () => openTableModal(table.id),
+    onClick: () => { selectTable(table.id); openTableModal(table.id); },
     moveTarget: node,
     onDragTick: (x, y) => broadcastTableDrag(table.id, x, y),
     onPositionChange: async (x, y) => {
@@ -588,6 +762,61 @@ function attachTableInteractions(node, table) {
       await api.updateTablePosition(table.id, x, y);
     }
   });
+}
+
+function attachRotateHandle(handle, node, table) {
+  const rotor = node.querySelector('.table-rotor');
+  const center = rotor.querySelector('.table-center');
+  let dragging = false, startPointer = 0, startRot = 0, curRot = Number(table.rotation) || 0;
+
+  const angleAt = (e) => {
+    const r = rotor.getBoundingClientRect();
+    return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180 / Math.PI;
+  };
+  const paint = (deg) => {
+    rotor.style.transform = `rotate(${deg}deg)`;
+    rotor.style.setProperty('--rot', deg + 'deg');
+    if (center) center.style.transform = `translate(-50%,-50%) rotate(${-deg}deg)`;
+  };
+  const onDown = (e) => {
+    e.stopPropagation(); e.preventDefault();
+    dragging = true;
+    startPointer = angleAt(e);
+    startRot = Number(table.rotation) || 0;
+    curRot = startRot;
+    node.classList.add('rotating');
+    state.dragActive = true;
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
+  const onMove = (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    let next = startRot + (angleAt(e) - startPointer);
+    next = ((next % 360) + 360) % 360;
+    if (!e.shiftKey) next = (Math.round(next / 15) * 15) % 360;
+    curRot = next;
+    paint(next);
+    broadcastTableSpin(table.id, next);
+  };
+  const onUp = async () => {
+    if (!dragging) return;
+    dragging = false;
+    node.classList.remove('rotating');
+    state.dragActive = false;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    table.rotation = curRot;
+    await fetch(`/api/tables/${table.id}/rotation`, {
+      method: 'PATCH', headers: json(), body: JSON.stringify({ rotation: curRot })
+    }).catch(() => {});
+    updateCanvasSize();
+    if (pendingRefresh) scheduleRefresh();
+  };
+  handle.addEventListener('pointerdown', onDown);
 }
 
 // ============ POINTER DRAG HELPER ============
@@ -843,6 +1072,7 @@ function setupZoomControls() {
     if (e.button !== 0) return;
     if (e.target.closest('.table-node')) return;
     if (e.target.closest('.zoom-controls, .floating-btn, button')) return;
+    clearTableSelection();
     panning = {
       id: e.pointerId,
       startX: e.clientX, startY: e.clientY,
@@ -1068,6 +1298,158 @@ $('#mg-delete').addEventListener('click', async () => {
   refresh();
 });
 
+// ============ TABLE EDITOR CONTROLS (layout / color / rotation) ============
+const CAP_ID = { mt: 'mt-capacity-input', nt: 'nt-capacity' };
+const ROT_ID = { mt: 'mt-rot-input', nt: 'nt-rot-input' };
+const _layoutDrop = { mt: 0, nt: 0 };
+const _colorPick = { mt: null, nt: null };
+
+function layoutTotal(L) {
+  return Math.max(1, (L.head | 0) * 2 + (L.side | 0) * 2 + (L.corners ? 4 : 0) - (L.drop | 0));
+}
+// Keep head + corners, solve `side` to hit a target total as evenly as possible.
+// Any odd seat left over is dropped from the trailing slot of one lateral.
+function solveLayout({ head, corners, total }) {
+  head = Math.max(0, head | 0);
+  const cor = corners ? 4 : 0;
+  const remain = Math.max(0, (total | 0) - head * 2 - cor);
+  const side = Math.ceil(remain / 2);
+  const drop = Math.max(0, Math.min(side, side * 2 - remain));
+  return { head, side, corners: !!corners, drop };
+}
+function readLayoutFields(prefix) {
+  return {
+    head: Math.max(0, Math.min(12, parseInt($(`#${prefix}-lay-head`).value, 10) || 0)),
+    side: Math.max(0, Math.min(60, parseInt($(`#${prefix}-lay-side`).value, 10) || 0)),
+    corners: $(`#${prefix}-lay-corners`).checked,
+    drop: 0
+  };
+}
+function currentLayout(prefix) {
+  const L = readLayoutFields(prefix);
+  L.drop = _layoutDrop[prefix] || 0;
+  if (L.drop > L.side) L.drop = 0;
+  return L;
+}
+function readRot(prefix) {
+  let n = parseInt($(`#${ROT_ID[prefix]}`).value, 10);
+  if (!Number.isFinite(n)) n = 0;
+  return ((n % 360) + 360) % 360;
+}
+
+function drawLayoutPreview(prefix, L) {
+  const svg = $(`#${prefix}-lay-preview`);
+  if (!svg) return;
+  const W = 220, m = 30;
+  const bx = m, by = m, bw = W - m * 2, bh = 150 - m * 2;
+  const dots = [];
+  const edge = (n, x1, y1, x2, y2, drop = 0) => {
+    for (let k = 0; k < n - drop; k++) {
+      const f = (k + 1) / (n + 1);
+      dots.push([x1 + (x2 - x1) * f, y1 + (y2 - y1) * f]);
+    }
+  };
+  edge(L.side, bx, by - 13, bx + bw, by - 13);
+  edge(L.side, bx, by + bh + 13, bx + bw, by + bh + 13, L.drop);
+  edge(L.head, bx - 13, by, bx - 13, by + bh);
+  edge(L.head, bx + bw + 13, by, bx + bw + 13, by + bh);
+  let extra = '';
+  if (L.corners) {
+    [[bx - 13, by - 13], [bx + bw + 13, by - 13], [bx + bw + 13, by + bh + 13], [bx - 13, by + bh + 13]]
+      .forEach(([x, y]) => { extra += `<circle cx="${x}" cy="${y}" r="3.6" class="mp-seat mp-corner"/>`; });
+  }
+  svg.innerHTML =
+    `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="10" class="mp-table"/>` +
+    dots.map(([x, y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.6" class="mp-seat"/>`).join('') +
+    extra;
+}
+function refreshLayoutUI(prefix) {
+  const L = currentLayout(prefix);
+  $(`#${prefix}-lay-total`).textContent = layoutTotal(L);
+  drawLayoutPreview(prefix, L);
+}
+function syncCapacityField(prefix) {
+  const shapeEl = document.querySelector(`input[name="${prefix}-shape"]:checked`);
+  const isRect = shapeEl && shapeEl.value === 'square';
+  const cap = $(`#${CAP_ID[prefix]}`);
+  if (isRect) {
+    cap.value = layoutTotal(currentLayout(prefix));
+    cap.readOnly = true;
+    cap.classList.add('is-derived');
+  } else {
+    cap.readOnly = false;
+    cap.classList.remove('is-derived');
+  }
+}
+function syncShapeUI(prefix) {
+  const shapeEl = document.querySelector(`input[name="${prefix}-shape"]:checked`);
+  const isRect = shapeEl && shapeEl.value === 'square';
+  const led = $(`#${prefix}-layout`);
+  if (led) led.hidden = !isRect;
+  if (isRect) refreshLayoutUI(prefix);
+  syncCapacityField(prefix);
+}
+function bindLayoutEditor(prefix) {
+  ['head', 'side'].forEach(k => {
+    $(`#${prefix}-lay-${k}`).addEventListener('input', () => {
+      _layoutDrop[prefix] = 0; refreshLayoutUI(prefix); syncCapacityField(prefix);
+    });
+  });
+  $(`#${prefix}-lay-corners`).addEventListener('change', () => {
+    _layoutDrop[prefix] = 0; refreshLayoutUI(prefix); syncCapacityField(prefix);
+  });
+  $(`#${prefix}-lay-apply`).addEventListener('click', () => {
+    const total = parseInt($(`#${prefix}-lay-target`).value, 10);
+    if (!Number.isFinite(total) || total < 2) { toast('Escribe un total valido', 'error'); return; }
+    const cur = readLayoutFields(prefix);
+    const solved = solveLayout({ head: cur.head, corners: cur.corners, total });
+    _layoutDrop[prefix] = solved.drop;
+    $(`#${prefix}-lay-side`).value = solved.side;
+    refreshLayoutUI(prefix); syncCapacityField(prefix);
+  });
+}
+function buildColorRow(prefix) {
+  const host = $(`#${prefix}-color-row`);
+  host.innerHTML =
+    `<button type="button" class="sw sw-none" data-c="" title="Sin color">&#10005;</button>` +
+    TABLE_COLORS.map(c => `<button type="button" class="sw" data-c="${c}" style="--sw:${c}"></button>`).join('') +
+    `<label class="sw sw-custom" title="Personalizado"><input type="color" id="${prefix}-color-custom" /></label>`;
+  host.querySelectorAll('.sw[data-c]').forEach(b => b.addEventListener('click', () => setColor(prefix, b.dataset.c || null)));
+  $(`#${prefix}-color-custom`).addEventListener('input', e => setColor(prefix, e.target.value));
+}
+function setColor(prefix, hex) {
+  hex = hex ? String(hex).toLowerCase() : null;
+  _colorPick[prefix] = hex;
+  const host = $(`#${prefix}-color-row`);
+  const inPreset = hex && TABLE_COLORS.some(c => c.toLowerCase() === hex);
+  host.querySelectorAll('.sw').forEach(b => {
+    if (b.classList.contains('sw-custom')) {
+      b.classList.toggle('on', !!hex && !inPreset);
+      b.style.setProperty('--sw', hex && !inPreset ? hex : 'transparent');
+    } else if (b.classList.contains('sw-none')) {
+      b.classList.toggle('on', !hex);
+    } else {
+      b.classList.toggle('on', !!hex && b.dataset.c.toLowerCase() === hex);
+    }
+  });
+}
+function bindRotRow(prefix) {
+  $(`#${ROT_ID[prefix]}`).closest('.rotate-row').querySelectorAll('.rot-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      const cur = parseInt($(`#${ROT_ID[prefix]}`).value, 10) || 0;
+      $(`#${ROT_ID[prefix]}`).value = (cur + Number(b.dataset.rot) + 360) % 360;
+    });
+  });
+}
+function initTableEditors() {
+  ['mt', 'nt'].forEach(p => {
+    buildColorRow(p);
+    bindLayoutEditor(p);
+    bindRotRow(p);
+    $$(`input[name="${p}-shape"]`).forEach(r => r.addEventListener('change', () => syncShapeUI(p)));
+  });
+}
+
 // ============ TABLE MODAL ============
 function openTableModal(id) {
   const t = state.tables.find(x => x.id === id);
@@ -1078,9 +1460,21 @@ function openTableModal(id) {
   $('#mt-count').textContent = t.guests.length;
   $('#mt-name-input').value = t.name;
   $('#mt-capacity-input').value = t.capacity || 10;
+
   const shape = t.shape === 'square' ? 'square' : 'circle';
   const shapeInput = document.querySelector(`input[name="mt-shape"][value="${shape}"]`);
   if (shapeInput) shapeInput.checked = true;
+
+  const L = (shape === 'square' && t.seat_layout) ? t.seat_layout : defaultLayoutFor(t.capacity);
+  _layoutDrop.mt = L.drop || 0;
+  $('#mt-lay-head').value = L.head | 0;
+  $('#mt-lay-side').value = L.side | 0;
+  $('#mt-lay-corners').checked = !!L.corners;
+  $('#mt-lay-target').value = '';
+
+  setColor('mt', t.color || null);
+  $('#mt-rot-input').value = Math.round(Number(t.rotation) || 0);
+  syncShapeUI('mt');
 
   renderTableMembers(t);
   updateQuickList();
@@ -1181,11 +1575,20 @@ $('#mt-new-add').addEventListener('click', async () => {
 
 $('#mt-save').addEventListener('click', async () => {
   const shapeEl = document.querySelector('input[name="mt-shape"]:checked');
-  await api.updateTable(state.currentTableId, {
+  const shape = shapeEl ? shapeEl.value : 'circle';
+  const body = {
     name: $('#mt-name-input').value.trim() || 'Mesa',
-    capacity: Number($('#mt-capacity-input').value) || 10,
-    shape: shapeEl ? shapeEl.value : 'circle'
-  });
+    shape,
+    color: _colorPick.mt,
+    rotation: readRot('mt')
+  };
+  if (shape === 'square') {
+    body.seat_layout = currentLayout('mt');
+  } else {
+    body.seat_layout = null;
+    body.capacity = Number($('#mt-capacity-input').value) || 10;
+  }
+  await api.updateTable(state.currentTableId, body);
   toast('Mesa actualizada', 'success');
   closeModal('#modal-table');
   refresh();
@@ -1230,13 +1633,31 @@ $('#btn-new-table').addEventListener('click', () => {
   $('#nt-name').value = `Mesa ${getNextTableNumber()}`;
   $('#nt-capacity').value = 10;
   $('#nt-count').value = 1;
+  const circleRadio = document.querySelector('input[name="nt-shape"][value="circle"]');
+  if (circleRadio) circleRadio.checked = true;
+  _layoutDrop.nt = 0;
+  const L = defaultLayoutFor(10);
+  $('#nt-lay-head').value = L.head;
+  $('#nt-lay-side').value = L.side;
+  $('#nt-lay-corners').checked = false;
+  $('#nt-lay-target').value = '';
+  setColor('nt', null);
+  $('#nt-rot-input').value = 0;
+  syncShapeUI('nt');
   openModal('#modal-new-table');
 });
 $('#nt-save').addEventListener('click', async () => {
   const count = Math.max(1, Math.min(50, Number($('#nt-count').value) || 1));
-  const capacity = Number($('#nt-capacity').value) || 10;
   const shapeEl = document.querySelector('input[name="nt-shape"]:checked');
   const shape = shapeEl ? shapeEl.value : 'circle';
+  const common = {
+    shape,
+    color: _colorPick.nt,
+    rotation: readRot('nt'),
+    ...(shape === 'square'
+      ? { seat_layout: currentLayout('nt') }
+      : { capacity: Number($('#nt-capacity').value) || 10 })
+  };
   const cols = 4;
   const startIdx = state.tables.length;
   const tables = [];
@@ -1248,8 +1669,7 @@ $('#nt-save').addEventListener('click', async () => {
       name,
       position_x: 80 + (startIdx % cols) * 280,
       position_y: 80 + Math.floor(startIdx / cols) * 280,
-      capacity,
-      shape
+      ...common
     });
   } else {
     const startNum = getNextTableNumber();
@@ -1259,8 +1679,7 @@ $('#nt-save').addEventListener('click', async () => {
         name: `Mesa ${startNum + i}`,
         position_x: 80 + (idx % cols) * 280,
         position_y: 80 + Math.floor(idx / cols) * 280,
-        capacity,
-        shape
+        ...common
       });
     }
   }
@@ -1500,16 +1919,23 @@ document.addEventListener('click', (e) => {
 
 // ============ MODAL HELPERS ============
 function openModal(sel) { $(sel).classList.remove('hidden'); }
-function closeModal(sel) { $(sel).classList.add('hidden'); }
+function closeModal(sel) {
+  $(sel).classList.add('hidden');
+  if (sel === '#modal-table') clearTableSelection();
+}
 $$('.modal').forEach(m => {
   m.addEventListener('click', (e) => {
     if (e.target === m || e.target.hasAttribute('data-close')) {
       m.classList.add('hidden');
+      if (m.id === 'modal-table') clearTableSelection();
     }
   });
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') $$('.modal').forEach(m => m.classList.add('hidden'));
+  if (e.key === 'Escape') {
+    $$('.modal').forEach(m => m.classList.add('hidden'));
+    clearTableSelection();
+  }
 });
 
 // ============ RENAME EVENT ============
@@ -1532,6 +1958,7 @@ function applyTheme(theme, animate = false) {
 $('#btn-theme').addEventListener('click', () => {
   const cur = document.documentElement.getAttribute('data-theme') || 'light';
   applyTheme(cur === 'dark' ? 'light' : 'dark', true);
+  renderCanvas(); // recompute per-table color tones for the new theme
 });
 
 // ============ AUTO-ARRANGE / UNDO UI ============
@@ -1545,7 +1972,137 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ============ PRINT / PDF ============
+// Seat number for a guest = its position in the table's guest list (+1),
+// matching how renderCanvas fills seats[i] = guests[i].
+function guestSeatInfo(guestId) {
+  const g = state.guests.find(x => x.id === guestId);
+  if (!g || !g.table_id) return null;
+  const t = state.tables.find(x => x.id === g.table_id);
+  if (!t) return null;
+  const idx = t.guests.findIndex(x => x.id === guestId);
+  if (idx < 0) return null;
+  return { table: t, seat: idx + 1 };
+}
+
+function tableSVG(t) {
+  const geo = tableGeometry(t);
+  const count = t.guests.length;
+  const baseCap = geo.capacity;
+  const px = t.position_x, py = t.position_y;
+  const rot = Number(t.rotation) || 0;
+  const cx = px + geo.w / 2, cy = py + geo.h / 2;
+  const cxr = geo.w / 2, cyr = geo.h / 2;
+  const seatCount = Math.max(geo.seats.length, count, baseCap);
+
+  let fill = '#ffffff', stroke = '#c9c4b6', ink = '#23211d', seatFill = '#23211d';
+  if (t.color) {
+    const b = hexToHsl(t.color);
+    if (b) {
+      fill = _hsl(b.h, b.s * 0.55, 95);
+      stroke = _hsl(b.h, b.s * 0.5, 52);
+      ink = _hsl(b.h, b.s * 0.6, 30);
+      seatFill = ink;
+    }
+  }
+
+  const shapeEl = t.shape === 'square'
+    ? `<rect x="${px}" y="${py}" width="${geo.w}" height="${geo.h}" rx="16" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`
+    : `<circle cx="${cx}" cy="${cy}" r="${geo.w / 2}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+
+  let seatsEl = '';
+  for (let i = 0; i < seatCount; i++) {
+    const s = geo.seats[i] || geo.seats[geo.seats.length - 1] || { x: cxr, y: geo.h + SEAT_OFF, n: i + 1 };
+    const ax = px + s.x, ay = py + s.y;
+    const occ = i < count;
+    seatsEl += `<circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="5.5" fill="${occ ? seatFill : '#ffffff'}" stroke="${occ ? seatFill : stroke}" stroke-width="1.5"/>`;
+    const dx = s.x - cxr, dy = s.y - cyr, len = Math.hypot(dx, dy) || 1;
+    const nx = px + s.x + (dx / len) * 15, ny = py + s.y + (dy / len) * 15;
+    seatsEl += `<text x="${nx.toFixed(1)}" y="${ny.toFixed(1)}" font-size="9" fill="#6b6862" text-anchor="middle" dominant-baseline="central" transform="rotate(${-rot} ${nx.toFixed(1)} ${ny.toFixed(1)})">${s.n ?? i + 1}</text>`;
+  }
+
+  const centerEl =
+    `<text x="${cx}" y="${cy - 4}" font-size="22" font-weight="700" fill="${ink}" text-anchor="middle" dominant-baseline="central" transform="rotate(${-rot} ${cx} ${cy})">${count}</text>` +
+    `<text x="${cx}" y="${cy + 14}" font-size="8" fill="#8b8881" letter-spacing="1" text-anchor="middle" dominant-baseline="central" transform="rotate(${-rot} ${cx} ${cy})">DE ${Math.max(count, baseCap)}</text>`;
+
+  const rotated = `<g transform="rotate(${rot} ${cx} ${cy})">${shapeEl}${seatsEl}${centerEl}</g>`;
+  const nameEl = `<text x="${cx}" y="${(py + geo.h + 26).toFixed(1)}" font-size="11" font-weight="600" fill="#1b1a17" text-anchor="middle">${esc(t.name)}</text>`;
+
+  const half = Math.hypot(geo.w / 2 + 30, geo.h / 2 + 30);
+  return {
+    svg: rotated + nameEl,
+    minX: cx - half, minY: cy - half,
+    maxX: cx + half, maxY: cy + half + 22
+  };
+}
+
+function buildPrintMap() {
+  if (!state.tables.length) return '<p class="pp-empty">Sin mesas para mostrar.</p>';
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, body = '';
+  state.tables.forEach(t => {
+    const r = tableSVG(t);
+    body += r.svg;
+    minX = Math.min(minX, r.minX); minY = Math.min(minY, r.minY);
+    maxX = Math.max(maxX, r.maxX); maxY = Math.max(maxY, r.maxY);
+  });
+  const pad = 26;
+  const w = (maxX - minX) + pad * 2, h = (maxY - minY) + pad * 2;
+  return `<svg class="pp-map" viewBox="${(minX - pad).toFixed(1)} ${(minY - pad).toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">${body}</svg>`;
+}
+
+function buildPrintRoster() {
+  const primaries = state.guests
+    .filter(g => !g.is_plus_one)
+    .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  if (!primaries.length) return '<p class="pp-empty">Sin invitados.</p>';
+  const rows = primaries.map(g => {
+    const kids = state.guests.filter(x => x.parent_id === g.id);
+    const locs = [];
+    const own = guestSeatInfo(g.id);
+    if (own) locs.push(`${esc(own.table.name)} &middot; asiento ${own.seat}`);
+    kids.forEach(k => {
+      const ks = guestSeatInfo(k.id);
+      if (ks) locs.push(`${esc(ks.table.name)} &middot; asiento ${ks.seat} <span class="pp-dim">(${esc(k.name)})</span>`);
+    });
+    return `<tr>
+      <td>${esc(g.name)}</td>
+      <td class="pp-center">${kids.length || '—'}</td>
+      <td>${locs.length ? locs.join('<br>') : '<span class="pp-dim">Sin asignar</span>'}</td>
+    </tr>`;
+  }).join('');
+  return `<table class="pp-roster">
+    <thead><tr><th>Invitado</th><th>Extras</th><th>Asientos ocupados</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function printPlan() {
+  const root = $('#print-root');
+  const name = (state.settings.event_name || '').trim() || DEFAULT_TITLE;
+  const date = new Date().toLocaleDateString('es', { year: 'numeric', month: 'long', day: 'numeric' });
+  const total = state.guests.length;
+  const assigned = state.guests.filter(g => g.table_id).length;
+  root.innerHTML = `
+    <section class="pp-page">
+      <header class="pp-head">
+        <h1>${esc(name)}</h1>
+        <div class="pp-meta">${date} &middot; ${total} invitados &middot; ${assigned} asignados &middot; ${state.tables.length} mesas</div>
+      </header>
+      ${buildPrintMap()}
+    </section>
+    <section class="pp-page pp-break">
+      <header class="pp-head">
+        <h1>${esc(name)}</h1>
+        <div class="pp-meta">Lista de invitados y asientos</div>
+      </header>
+      ${buildPrintRoster()}
+    </section>`;
+  window.print();
+}
+$('#btn-print').addEventListener('click', printPlan);
+
 // ============ BOOT ============
+initTableEditors();
 setupZoomControls();
 connectSSE();
 refresh();

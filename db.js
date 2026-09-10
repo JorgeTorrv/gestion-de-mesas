@@ -8,14 +8,59 @@ const pool = new Pool({
 
 function nowISO() { return new Date().toISOString(); }
 
+// ---- Seat layout helpers (rectangular tables) ----
+// layout = { head, side, corners, drop }
+//   head    seats per cabecera (short end), applied to BOTH ends
+//   side    seats per lateral (long side), target for BOTH sides
+//   corners 4 corner seats on/off
+//   drop    seats removed from the trailing slots of ONE lateral (keeps others aligned)
+export function cleanLayout(l) {
+  if (!l || typeof l !== 'object') return null;
+  const head = Math.max(0, Math.min(12, Math.round(Number(l.head) || 0)));
+  const side = Math.max(0, Math.min(60, Math.round(Number(l.side) || 0)));
+  const corners = !!l.corners;
+  const maxDrop = Math.max(0, side);
+  const drop = Math.max(0, Math.min(maxDrop, Math.round(Number(l.drop) || 0)));
+  return { head, side, corners, drop };
+}
+
+export function layoutCapacity(l) {
+  const c = cleanLayout(l);
+  if (!c) return null;
+  return Math.max(1, c.head * 2 + c.side * 2 + (c.corners ? 4 : 0) - c.drop);
+}
+
+function cleanColor(c) {
+  if (typeof c !== 'string') return null;
+  const s = c.trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(s) ? s : null;
+}
+
+function cleanRotation(r) {
+  let n = Number(r);
+  if (!Number.isFinite(n)) return 0;
+  n = ((n % 360) + 360) % 360;
+  return Math.round(n * 10) / 10;
+}
+
 function normalizeTable(row) {
+  const shape = row.shape === 'square' ? 'square' : 'circle';
+  let seat_layout = row.seat_layout ?? null;
+  if (typeof seat_layout === 'string') {
+    try { seat_layout = JSON.parse(seat_layout); } catch { seat_layout = null; }
+  }
+  if (shape === 'square') seat_layout = cleanLayout(seat_layout);
+  else seat_layout = null;
   return {
     id: Number(row.id),
     name: row.name,
     position_x: Number(row.position_x) || 0,
     position_y: Number(row.position_y) || 0,
     capacity: Number(row.capacity) || 10,
-    shape: row.shape === 'square' ? 'square' : 'circle',
+    shape,
+    rotation: cleanRotation(row.rotation),
+    color: cleanColor(row.color),
+    seat_layout,
     created_at: row.created_at || ''
   };
 }
@@ -33,6 +78,34 @@ function normalizeGuest(row) {
     confirmed: row.confirmed ? 1 : 0,
     created_at: row.created_at || ''
   };
+}
+
+// Resolve the fields to persist for a table given a patch + existing row.
+function resolveTableFields(patch = {}, existing = null) {
+  const base = existing || {};
+  const name = patch.name != null ? String(patch.name).trim() || 'Mesa' : (base.name ?? 'Mesa');
+  const position_x = patch.position_x != null ? Number(patch.position_x) || 0 : (Number(base.position_x) || 0);
+  const position_y = patch.position_y != null ? Number(patch.position_y) || 0 : (Number(base.position_y) || 0);
+  const shape = (patch.shape != null ? patch.shape : base.shape) === 'square' ? 'square' : 'circle';
+  const rotation = patch.rotation != null ? cleanRotation(patch.rotation) : cleanRotation(base.rotation);
+  const color = 'color' in patch ? cleanColor(patch.color) : cleanColor(base.color);
+
+  let seat_layout = null;
+  if (shape === 'square') {
+    if ('seat_layout' in patch) seat_layout = cleanLayout(patch.seat_layout);
+    else seat_layout = cleanLayout(base.seat_layout);
+  }
+
+  let capacity;
+  if (shape === 'square' && seat_layout) {
+    capacity = layoutCapacity(seat_layout);
+  } else if (patch.capacity != null) {
+    capacity = Math.max(1, Math.round(Number(patch.capacity) || 10));
+  } else {
+    capacity = Math.max(1, Math.round(Number(base.capacity) || 10));
+  }
+
+  return { name, position_x, position_y, capacity, shape, rotation, color, seat_layout };
 }
 
 export async function initSchema() {
@@ -63,6 +136,10 @@ export async function initSchema() {
       event_name TEXT    NOT NULL DEFAULT ''
     );
     INSERT INTO mesas_settings(id, event_name) VALUES(1, '') ON CONFLICT DO NOTHING;
+
+    ALTER TABLE mesas_tables ADD COLUMN IF NOT EXISTS rotation    REAL  NOT NULL DEFAULT 0;
+    ALTER TABLE mesas_tables ADD COLUMN IF NOT EXISTS color       TEXT;
+    ALTER TABLE mesas_tables ADD COLUMN IF NOT EXISTS seat_layout JSONB;
   `);
 }
 
@@ -83,23 +160,35 @@ export const queries = {
   },
 
   createTable: {
-    run: async (name, position_x, position_y, capacity, shape = 'circle') => {
+    // Accepts either an object patch or the legacy positional signature
+    // (name, position_x, position_y, capacity, shape).
+    run: async (patch, position_x, position_y, capacity, shape) => {
+      const input = (patch && typeof patch === 'object')
+        ? patch
+        : { name: patch, position_x, position_y, capacity, shape };
+      const f = resolveTableFields(input, null);
       const { rows } = await pool.query(
-        `INSERT INTO mesas_tables(name, position_x, position_y, capacity, shape, created_at)
-         VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
-        [name, Number(position_x) || 0, Number(position_y) || 0,
-         Number(capacity) || 10, shape === 'square' ? 'square' : 'circle', nowISO()]
+        `INSERT INTO mesas_tables
+           (name, position_x, position_y, capacity, shape, rotation, color, seat_layout, created_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [f.name, f.position_x, f.position_y, f.capacity, f.shape,
+         f.rotation, f.color, f.seat_layout ? JSON.stringify(f.seat_layout) : null, nowISO()]
       );
       return { lastInsertRowid: rows[0].id };
     }
   },
 
   updateTable: {
-    run: async (name, position_x, position_y, capacity, id, shape) => {
+    // updateTable.run(patchObject, id, existingRow)
+    run: async (patch, id, existing = null) => {
+      const f = resolveTableFields(patch || {}, existing);
       await pool.query(
-        `UPDATE mesas_tables SET name=$1, position_x=$2, position_y=$3, capacity=$4, shape=$5 WHERE id=$6`,
-        [name, Number(position_x) || 0, Number(position_y) || 0,
-         Number(capacity) || 10, shape === 'square' ? 'square' : 'circle', Number(id)]
+        `UPDATE mesas_tables
+            SET name=$1, position_x=$2, position_y=$3, capacity=$4, shape=$5,
+                rotation=$6, color=$7, seat_layout=$8
+          WHERE id=$9`,
+        [f.name, f.position_x, f.position_y, f.capacity, f.shape,
+         f.rotation, f.color, f.seat_layout ? JSON.stringify(f.seat_layout) : null, Number(id)]
       );
     }
   },
@@ -109,6 +198,15 @@ export const queries = {
       await pool.query(
         `UPDATE mesas_tables SET position_x=$1, position_y=$2 WHERE id=$3`,
         [Number(position_x) || 0, Number(position_y) || 0, Number(id)]
+      );
+    }
+  },
+
+  updateTableRotation: {
+    run: async (rotation, id) => {
+      await pool.query(
+        `UPDATE mesas_tables SET rotation=$1 WHERE id=$2`,
+        [cleanRotation(rotation), Number(id)]
       );
     }
   },
@@ -255,7 +353,7 @@ export const queries = {
     const maxTableId = tables.length ? Math.max(...tables.map(t => Number(t.id))) : 0;
     const maxGuestId = guests.length ? Math.max(...guests.map(g => Number(g.id))) : 0;
     return {
-      version: 1,
+      version: 2,
       exported_at: nowISO(),
       tables: tables.map(normalizeTable),
       guests: guests.map(normalizeGuest),
@@ -274,15 +372,15 @@ export const queries = {
       await client.query('DELETE FROM mesas_guests');
       await client.query('DELETE FROM mesas_tables');
 
-      for (const t of payload.tables) {
+      for (const raw of payload.tables) {
+        const f = resolveTableFields(raw, null);
         await client.query(
-          `INSERT INTO mesas_tables(id,name,position_x,position_y,capacity,shape,created_at)
-           VALUES($1,$2,$3,$4,$5,$6,$7)`,
-          [Number(t.id), String(t.name || 'Mesa'),
-           Number(t.position_x) || 0, Number(t.position_y) || 0,
-           Number(t.capacity) || 10,
-           t.shape === 'square' ? 'square' : 'circle',
-           t.created_at || nowISO()]
+          `INSERT INTO mesas_tables
+             (id,name,position_x,position_y,capacity,shape,rotation,color,seat_layout,created_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [Number(raw.id), f.name, f.position_x, f.position_y, f.capacity, f.shape,
+           f.rotation, f.color, f.seat_layout ? JSON.stringify(f.seat_layout) : null,
+           raw.created_at || nowISO()]
         );
       }
 

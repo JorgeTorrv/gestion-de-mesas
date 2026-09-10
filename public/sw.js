@@ -1,4 +1,4 @@
-const CACHE = 'seatmap-v1';
+const CACHE = 'seatmap-v3';
 const SHELL = [
   './index.html',
   './styles.css',

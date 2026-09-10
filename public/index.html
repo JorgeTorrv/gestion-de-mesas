@@ -43,6 +43,10 @@
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 14l5 5 5-5M12 19V7"/></svg>
       <span class="btn-label">Guardar</span>
     </button>
+    <button id="btn-print" class="btn btn-ghost" title="Imprimir / PDF">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg>
+      <span class="btn-label">Imprimir</span>
+    </button>
     <label class="btn btn-ghost" for="backup-input" title="Abrir respaldo">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v4H3zM3 11h18v10H3zM8 15h8"/></svg>
       <span class="btn-label">Abrir</span>
@@ -175,6 +179,37 @@
         </div>
       </div>
 
+      <div class="field layout-editor" id="mt-layout" hidden>
+        <label>Distribucion de asientos</label>
+        <div class="layout-grid">
+          <div class="lay-field"><span>Cabecera <em>c/u</em></span><input id="mt-lay-head" type="number" min="0" max="12" /></div>
+          <div class="lay-field"><span>Lateral <em>c/u</em></span><input id="mt-lay-side" type="number" min="0" max="60" /></div>
+          <label class="lay-toggle"><input type="checkbox" id="mt-lay-corners" /><span>Esquinas</span></label>
+        </div>
+        <div class="layout-adjust">
+          <span class="la-label">Ajustar a</span>
+          <input id="mt-lay-target" type="number" min="1" placeholder="total" />
+          <button type="button" id="mt-lay-apply" class="btn btn-ghost btn-sm">Aplicar</button>
+          <span class="layout-total">Total <strong id="mt-lay-total">0</strong></span>
+        </div>
+        <svg class="mini-preview" id="mt-lay-preview" viewBox="0 0 220 150" aria-hidden="true"></svg>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>Color</label>
+          <div class="color-swatches" id="mt-color-row"></div>
+        </div>
+        <div class="field field-sm">
+          <label>Rotacion</label>
+          <div class="rotate-row">
+            <button type="button" class="rot-btn" data-rot="-90">&#8630;</button>
+            <input id="mt-rot-input" type="number" min="0" max="359" step="1" />
+            <button type="button" class="rot-btn" data-rot="90">&#8631;</button>
+          </div>
+        </div>
+      </div>
+
       <div class="section-title"><h3>Invitados en esta mesa</h3></div>
       <div id="mt-members" class="table-members"></div>
 
@@ -244,6 +279,37 @@
           </label>
         </div>
       </div>
+
+      <div class="field layout-editor" id="nt-layout" hidden>
+        <label>Distribucion de asientos</label>
+        <div class="layout-grid">
+          <div class="lay-field"><span>Cabecera <em>c/u</em></span><input id="nt-lay-head" type="number" min="0" max="12" /></div>
+          <div class="lay-field"><span>Lateral <em>c/u</em></span><input id="nt-lay-side" type="number" min="0" max="60" /></div>
+          <label class="lay-toggle"><input type="checkbox" id="nt-lay-corners" /><span>Esquinas</span></label>
+        </div>
+        <div class="layout-adjust">
+          <span class="la-label">Ajustar a</span>
+          <input id="nt-lay-target" type="number" min="1" placeholder="total" />
+          <button type="button" id="nt-lay-apply" class="btn btn-ghost btn-sm">Aplicar</button>
+          <span class="layout-total">Total <strong id="nt-lay-total">0</strong></span>
+        </div>
+        <svg class="mini-preview" id="nt-lay-preview" viewBox="0 0 220 150" aria-hidden="true"></svg>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>Color</label>
+          <div class="color-swatches" id="nt-color-row"></div>
+        </div>
+        <div class="field field-sm">
+          <label>Rotacion</label>
+          <div class="rotate-row">
+            <button type="button" class="rot-btn" data-rot="-90">&#8630;</button>
+            <input id="nt-rot-input" type="number" min="0" max="359" step="1" value="0" />
+            <button type="button" class="rot-btn" data-rot="90">&#8631;</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" data-close>Cancelar</button>
@@ -298,6 +364,8 @@
 
 <div id="drag-ghost" class="drag-ghost hidden"></div>
 <div id="seat-tip" class="seat-tip hidden"></div>
+
+<div id="print-root" aria-hidden="true"></div>
 
 <script src="app.js" type="module"></script>
 <script>
