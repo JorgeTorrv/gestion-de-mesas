@@ -343,6 +343,23 @@
   </div>
 </div>
 
+<!-- Modal: Seat picker -->
+<div id="modal-seat" class="modal hidden">
+  <div class="modal-card modal-sm">
+    <button class="modal-close" data-close>&times;</button>
+    <h2 id="ms-title">Asiento</h2>
+    <div class="modal-body">
+      <p id="ms-current" class="hint"></p>
+      <input id="ms-search" type="text" placeholder="Buscar invitado..." />
+      <div id="ms-list" class="seat-pick-list"></div>
+    </div>
+    <div class="modal-actions">
+      <button id="ms-clear" class="btn btn-danger-ghost">Vaciar asiento</button>
+      <button class="btn btn-ghost" data-close>Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Confirm / Prompt -->
 <div id="modal-dialog" class="modal hidden">
   <div class="modal-card modal-sm">

@@ -72,16 +72,16 @@ function rectGeometry(count, layout) {
 
   const along = (k, total, length) => (length / (total + 1)) * (k + 1);
   const seats = [];
-  // Numbering walks the perimeter starting at the LEFT cabecera (head), going
-  // down that head, along the bottom, up the right head, back across the top.
-  for (let k = 0; k < head; k++)                    seats.push({ x: -SEAT_OFF,      y: along(k, head, h) });          // left head  T->B
-  if (corners)                                      seats.push({ x: -SEAT_OFF,      y: h + SEAT_OFF });               // bottom-left corner
-  for (let k = 0; k < effSide - drop; k++)          seats.push({ x: along(k, effSide, w), y: h + SEAT_OFF });         // bottom     L->R
-  if (corners)                                      seats.push({ x: w + SEAT_OFF,   y: h + SEAT_OFF });               // bottom-right corner
-  for (let k = head - 1; k >= 0; k--)               seats.push({ x: w + SEAT_OFF,   y: along(k, head, h) });          // right head B->T
-  if (corners)                                      seats.push({ x: w + SEAT_OFF,   y: -SEAT_OFF });                  // top-right corner
-  for (let k = effSide - 1; k >= 0; k--)            seats.push({ x: along(k, effSide, w), y: -SEAT_OFF });            // top        R->L
-  if (corners)                                      seats.push({ x: -SEAT_OFF,      y: -SEAT_OFF });                  // top-left corner
+  // Numbering: start at the LEFT cabecera (seats 1..head), then run along the
+  // TOP edge to the RIGHT, down the right cabecera, then along the BOTTOM edge.
+  for (let k = 0; k < head; k++)                  seats.push({ x: -SEAT_OFF,           y: along(k, head, h) });       // left head  T->B
+  if (corners)                                    seats.push({ x: -SEAT_OFF,           y: -SEAT_OFF });              // top-left corner
+  for (let k = 0; k < effSide; k++)               seats.push({ x: along(k, effSide, w), y: -SEAT_OFF });             // top        L->R
+  if (corners)                                    seats.push({ x: w + SEAT_OFF,        y: -SEAT_OFF });              // top-right corner
+  for (let k = 0; k < head; k++)                  seats.push({ x: w + SEAT_OFF,        y: along(k, head, h) });      // right head T->B
+  if (corners)                                    seats.push({ x: w + SEAT_OFF,        y: h + SEAT_OFF });           // bottom-right corner
+  for (let k = 0; k < effSide - drop; k++)        seats.push({ x: along(k, effSide, w), y: h + SEAT_OFF });          // bottom     L->R (drop trims the right end)
+  if (corners)                                    seats.push({ x: -SEAT_OFF,           y: h + SEAT_OFF });           // bottom-left corner
 
   seats.forEach((s, i) => { s.n = i + 1; });
   return { w, h, shape: 'square', seats, capacity: baseCap };
@@ -93,6 +93,35 @@ function tableGeometry(t) {
     return rectGeometry(count, t.seat_layout || defaultLayoutFor(t.capacity));
   }
   return circleGeometry(count, t.capacity);
+}
+
+// Resolve which guest sits in which seat: honour pinned `seat`, then fill the
+// rest into the lowest free seats in list order.
+function computeSeating(t) {
+  const geo = tableGeometry(t);
+  const guests = t.guests || [];
+  const seatCount = Math.max(geo.seats.length, guests.length, 1);
+  const guestAt = new Array(seatCount).fill(null);
+  const seatOf = new Map();
+  const floating = [];
+  for (const g of guests) {
+    const s = Number(g.seat);
+    if (Number.isInteger(s) && s >= 1 && s <= seatCount && guestAt[s - 1] == null) {
+      guestAt[s - 1] = g;
+      seatOf.set(g.id, s);
+    } else {
+      floating.push(g);
+    }
+  }
+  let cursor = 0;
+  for (const g of floating) {
+    while (cursor < seatCount && guestAt[cursor] != null) cursor++;
+    if (cursor >= seatCount) break;
+    guestAt[cursor] = g;
+    seatOf.set(g.id, cursor + 1);
+    cursor++;
+  }
+  return { geo, seatCount, guestAt, seatOf };
 }
 const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 1.8;
@@ -115,7 +144,12 @@ const api = {
   async createGuest(data) { return post('/api/guests', data); },
   async createGuestsBulk(rows) { return post('/api/guests/bulk', { guests: rows }); },
   async updateGuest(id, data) { return put(`/api/guests/${id}`, data); },
-  async assignGuest(id, tableId) { return fetch(`/api/guests/${id}/assign`, { method: 'PATCH', headers: json(), body: JSON.stringify({ table_id: tableId }) }); },
+  async assignGuest(id, tableId, seat) {
+    const body = { table_id: tableId };
+    if (seat !== undefined) body.seat = seat;
+    return fetch(`/api/guests/${id}/assign`, { method: 'PATCH', headers: json(), body: JSON.stringify(body) });
+  },
+  async setGuestSeat(id, seat) { return fetch(`/api/guests/${id}/seat`, { method: 'PATCH', headers: json(), body: JSON.stringify({ seat: seat ?? null }) }); },
   async setConfirmed(id, confirmed) { return fetch(`/api/guests/${id}/confirm`, { method: 'PATCH', headers: json(), body: JSON.stringify({ confirmed: confirmed ? 1 : 0 }) }); },
   async deleteGuest(id) { return fetch(`/api/guests/${id}`, { method: 'DELETE' }); },
   async reset() { return post('/api/reset', {}); },
@@ -210,9 +244,10 @@ function applyRemoteDrag({ id, position_x, position_y }) {
   if (t) { t.position_x = position_x; t.position_y = position_y; }
   const node = document.querySelector(`.table-node[data-table-id="${id}"]`);
   if (!node) return;
+  const ox = Number(node.dataset.offx) || 0, oy = Number(node.dataset.offy) || 0;
   node.classList.add('remote-moving');
-  node.style.left = position_x + 'px';
-  node.style.top = position_y + 'px';
+  node.style.left = Math.max(0, position_x - ox) + 'px';
+  node.style.top = Math.max(0, position_y - oy) + 'px';
   clearTimeout(node._remoteTimer);
   node._remoteTimer = setTimeout(() => node.classList.remove('remote-moving'), 260);
 }
@@ -393,21 +428,20 @@ function renderGuestList() {
 }
 
 // ============ ZOOM / CANVAS SIZE / EDGE SCROLL ============
-// Axis-aligned bounding box of a table (seat overhang + rotation) for layout math.
-function tableDim(t) {
+// The on-canvas node is a square that holds the table at any rotation.
+// Returns that square's size plus the offset of the (unrotated) table inside it.
+function tableBox(t) {
   const g = tableGeometry(t);
-  const pad = SEAT_OFF + 16;
-  const bw = g.w + pad * 2;
-  const bh = g.h + pad * 2;
-  const rot = (Number(t.rotation) || 0) * Math.PI / 180;
-  const c = Math.abs(Math.cos(rot)), s = Math.abs(Math.sin(rot));
-  return {
-    w: Math.round(bw * c + bh * s),
-    h: Math.round(bw * s + bh * c),
-    base: Math.max(bw, bh)
-  };
+  const OH = SEAT_OFF + 22;
+  const S = Math.ceil(Math.hypot(g.w + OH * 2, g.h + OH * 2));
+  return { S, offX: (S - g.w) / 2, offY: (S - g.h) / 2, gw: g.w, gh: g.h };
 }
-function tableSize(t) { const { w, h } = tableDim(t); return Math.max(w, h); }
+// Extent from position_x/position_y to the far edge of the node box (for canvas sizing).
+function tableDim(t) {
+  const b = tableBox(t);
+  return { w: b.S - b.offX, h: b.S - b.offY + 30, base: b.S };
+}
+function tableSize(t) { return tableBox(t).S; }
 
 // ============ TABLE COLOR (tonal) ============
 function hexToHsl(hex) {
@@ -518,11 +552,13 @@ function fitView() {
   const wrap = $('.canvas-wrap');
   let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
   state.tables.forEach(t => {
-    const d = tableDim(t);
-    minX = Math.min(minX, t.position_x);
-    minY = Math.min(minY, t.position_y);
-    maxX = Math.max(maxX, t.position_x + d.w);
-    maxY = Math.max(maxY, t.position_y + d.h + 40);
+    const b = tableBox(t);
+    const left = Math.max(0, t.position_x - b.offX);
+    const top = Math.max(0, t.position_y - b.offY);
+    minX = Math.min(minX, left);
+    minY = Math.min(minY, top);
+    maxX = Math.max(maxX, left + b.S);
+    maxY = Math.max(maxY, top + b.S + 30);
   });
   const contentW = Math.max(1, maxX - minX + 120);
   const contentH = Math.max(1, maxY - minY + 120);
@@ -581,22 +617,41 @@ function renderCanvas() {
 
   state.tables.forEach(t => {
     const count = t.guests.length;
-    const g = tableGeometry(t);
+    const { geo: g, seatCount, guestAt } = computeSeating(t);
     const baseCap = g.capacity;
     const displayCap = Math.max(count, baseCap);
     const overBase = count > baseCap;
     const rot = Number(t.rotation) || 0;
-    const seatCount = Math.max(g.seats.length, displayCap);
+
+    // The node reserves a square big enough for any rotation, with the table
+    // centred inside it — so a rotated table never spills past its own box.
+    const OH = SEAT_OFF + 22;
+    const S = Math.ceil(Math.hypot(g.w + OH * 2, g.h + OH * 2));
+    const offX = (S - g.w) / 2, offY = (S - g.h) / 2;
+
+    // Heal positions too close to the canvas edge for the (bigger) box to fit.
+    if (!t._healedBox && (t.position_x < offX || t.position_y < offY)) {
+      t._healedBox = true;
+      t.position_x = Math.max(offX, t.position_x);
+      t.position_y = Math.max(offY, t.position_y);
+      api.updateTablePosition(t.id, Math.round(t.position_x), Math.round(t.position_y));
+    }
 
     const node = document.createElement('div');
     node.className = 'table-node' + (t.id === state.selectedTableId ? ' selected' : '');
     node.dataset.tableId = t.id;
-    node.style.left = `${t.position_x}px`;
-    node.style.top = `${t.position_y}px`;
+    node.dataset.offx = offX;
+    node.dataset.offy = offY;
+    node.style.left = Math.max(0, t.position_x - offX) + 'px';
+    node.style.top = Math.max(0, t.position_y - offY) + 'px';
+    node.style.width = S + 'px';
+    node.style.height = (S + 30) + 'px';
     if (t.color) applyTableColor(node, t.color);
 
     const rotor = document.createElement('div');
     rotor.className = 'table-rotor' + (t.shape === 'square' ? ' square' : '');
+    rotor.style.left = offX + 'px';
+    rotor.style.top = offY + 'px';
     rotor.style.width = g.w + 'px';
     rotor.style.height = g.h + 'px';
     rotor.style.setProperty('--rot', rot + 'deg');
@@ -609,23 +664,29 @@ function renderCanvas() {
     const cxr = g.w / 2, cyr = g.h / 2;
     for (let i = 0; i < seatCount; i++) {
       const s = g.seats[i] || g.seats[g.seats.length - 1] || { x: g.w / 2, y: g.h + SEAT_OFF, n: i + 1 };
+      const seatNum = s.n ?? (i + 1);
+      const who = guestAt[i] || null;
       const dot = document.createElement('div');
       let cls = 'seat';
-      const occ = i < count;
-      if (occ) cls += ' occupied';
+      if (who) cls += ' occupied';
       if (i >= baseCap) cls += ' over-base';
       dot.className = cls;
       dot.style.left = s.x + 'px';
       dot.style.top = s.y + 'px';
-      if (occ) {
-        dot.dataset.name = t.guests[i]?.name || '';
+      dot.dataset.seatNum = seatNum;
+      if (who) {
+        dot.dataset.name = who.name || '';
         attachSeatTooltip(dot);
       }
+      dot.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openSeatPicker(t.id, seatNum);
+      });
       rotor.appendChild(dot);
 
       const num = document.createElement('div');
       num.className = 'seat-num';
-      num.textContent = s.n ?? (i + 1);
+      num.textContent = seatNum;
       const dx = s.x - cxr, dy = s.y - cyr;
       const len = Math.hypot(dx, dy) || 1;
       num.style.left = (s.x + (dx / len) * 13) + 'px';
@@ -646,12 +707,16 @@ function renderCanvas() {
     const handle = document.createElement('div');
     handle.className = 'rotate-handle';
     handle.title = 'Girar mesa (Shift: libre)';
+    handle.style.left = '50%';
+    handle.style.top = (offY - 30) + 'px';
     handle.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
     node.appendChild(handle);
 
     const nameEl = document.createElement('div');
     nameEl.className = 'table-name';
     nameEl.textContent = t.name;
+    nameEl.style.left = '50%';
+    nameEl.style.top = (offY + g.h + 12) + 'px';
     node.appendChild(nameEl);
 
     canvas.appendChild(node);
@@ -754,14 +819,22 @@ function clearTableSelection() {
 }
 
 function attachTableInteractions(node, table) {
+  const ox = () => Number(node.dataset.offx) || 0;
+  const oy = () => Number(node.dataset.offy) || 0;
   enableDragOrClick(node, {
     onClick: () => { selectTable(table.id); openTableModal(table.id); },
     moveTarget: node,
-    onDragTick: (x, y) => broadcastTableDrag(table.id, x, y),
+    skipOn: '.seat',
+    // drag math runs in node-box space; add the box offset back for real coords
+    onDragTick: (x, y) => broadcastTableDrag(table.id, x + ox(), y + oy()),
     onPositionChange: async (x, y) => {
-      table.position_x = x;
-      table.position_y = y;
-      await api.updateTablePosition(table.id, x, y);
+      const px = Math.max(0, Math.round(x + ox()));
+      const py = Math.max(0, Math.round(y + oy()));
+      table.position_x = px;
+      table.position_y = py;
+      node.dataset.px = px;
+      node.dataset.py = py;
+      await api.updateTablePosition(table.id, px, py);
     }
   });
 }
@@ -1492,7 +1565,20 @@ function renderTableMembers(t) {
     host.innerHTML = '<div class="hint" style="padding:6px 0;">Mesa vacia. Usa los campos de abajo para agregar.</div>';
     return;
   }
-  host.innerHTML = t.guests.map(g => `
+  const { seatCount, seatOf, guestAt } = computeSeating(t);
+  const takenBy = {};
+  guestAt.forEach((g, i) => { if (g) takenBy[i + 1] = g; });
+
+  host.innerHTML = t.guests.map(g => {
+    const at = seatOf.get(g.id);
+    const pinned = Number.isInteger(Number(g.seat));
+    const opts = [`<option value="">auto${at ? ` (${at})` : ''}</option>`];
+    for (let n = 1; n <= seatCount; n++) {
+      const occ = takenBy[n];
+      const label = occ && occ.id !== g.id ? `${n} · ${occ.name.split(' ')[0]}` : `${n}`;
+      opts.push(`<option value="${n}" ${pinned && Number(g.seat) === n ? 'selected' : ''}>${esc(label)}</option>`);
+    }
+    return `
     <div class="member-row ${g.confirmed ? 'is-confirmed' : ''}" data-guest-id="${g.id}">
       <div class="left">
         <button class="confirm-toggle ${g.confirmed ? 'on' : ''}" data-confirm="${g.id}" aria-pressed="${g.confirmed ? 'true' : 'false'}" title="${g.confirmed ? 'Confirmado' : 'Marcar confirmado'}">
@@ -1503,18 +1589,29 @@ function renderTableMembers(t) {
           <div class="phone">${g.phone ? esc(g.phone) : 'sin telefono'}</div>
         </div>
       </div>
-      <div style="display:flex;gap:6px;flex-shrink:0;">
+      <div class="member-actions">
+        <label class="member-seat" title="Asiento">
+          <span>#</span>
+          <select data-seat-for="${g.id}">${opts.join('')}</select>
+        </label>
         <button data-act="info">Ver</button>
         <button data-act="remove" title="Sacar">Sacar</button>
       </div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 
   $$('.member-row', host).forEach(row => {
     const id = Number(row.dataset.guestId);
     row.querySelector('[data-act="info"]').addEventListener('click', () => {
       closeModal('#modal-table');
       openGuestModal(id);
+    });
+    row.querySelector('select[data-seat-for]').addEventListener('change', async (e) => {
+      const v = e.target.value ? Number(e.target.value) : null;
+      await api.assignGuest(id, state.currentTableId, v);
+      await refresh();
+      const updated = state.tables.find(x => x.id === state.currentTableId);
+      if (updated) { $('#mt-count').textContent = updated.guests.length; renderTableMembers(updated); updateQuickList(); }
     });
     row.querySelector('[data-act="remove"]').addEventListener('click', async () => {
       await api.assignGuest(id, null);
@@ -1601,6 +1698,75 @@ $('#mt-delete').addEventListener('click', async () => {
   await api.deleteTable(state.currentTableId);
   closeModal('#modal-table');
   refresh();
+});
+
+// ============ SEAT PICKER ============
+let _seatPick = { tableId: null, seat: null };
+
+function openSeatPicker(tableId, seatNum) {
+  const t = state.tables.find(x => x.id === tableId);
+  if (!t) return;
+  _seatPick = { tableId, seat: seatNum };
+  const { guestAt } = computeSeating(t);
+  const occ = guestAt[seatNum - 1] || null;
+  $('#ms-title').textContent = `${t.name} · asiento ${seatNum}`;
+  $('#ms-current').textContent = occ ? `Ocupa: ${occ.name}` : 'Asiento libre';
+  $('#ms-clear').style.display = occ ? '' : 'none';
+  $('#ms-search').value = '';
+  renderSeatPickList('');
+  openModal('#modal-seat');
+  setTimeout(() => $('#ms-search').focus(), 50);
+}
+
+function renderSeatPickList(q) {
+  const t = state.tables.find(x => x.id === _seatPick.tableId);
+  const host = $('#ms-list');
+  if (!t) { host.innerHTML = ''; return; }
+  q = (q || '').toLowerCase().trim();
+  const { seatOf, guestAt } = computeSeating(t);
+  const here = guestAt[_seatPick.seat - 1] || null;
+  const cands = state.guests.filter(g => {
+    if (g.id === here?.id) return false;                 // already in this seat
+    if (g.table_id && g.table_id !== t.id) return false; // busy at another table
+    if (q && !g.name.toLowerCase().includes(q)) return false;
+    return true;
+  }).slice(0, 80);
+
+  host.innerHTML = cands.length
+    ? cands.map(g => {
+        const at = seatOf.get(g.id);
+        const meta = g.table_id === t.id ? (at ? `asiento ${at}` : 'en la mesa') : 'sin mesa';
+        return `<button class="seat-pick-item" data-gid="${g.id}">
+          <span class="spi-name">${esc(g.name)}${g.is_plus_one ? ' <span class="tag tag-plus">+1</span>' : ''}</span>
+          <span class="spi-meta">${meta}</span>
+        </button>`;
+      }).join('')
+    : '<div class="hint" style="padding:12px 2px;">Nadie disponible.</div>';
+
+  $$('.seat-pick-item', host).forEach(b => b.addEventListener('click', async () => {
+    await api.assignGuest(Number(b.dataset.gid), _seatPick.tableId, _seatPick.seat);
+    toast('Asiento asignado', 'success');
+    closeModal('#modal-seat');
+    await refresh();
+    if (!$('#modal-table').classList.contains('hidden')) {
+      const t2 = state.tables.find(x => x.id === state.currentTableId);
+      if (t2) { $('#mt-count').textContent = t2.guests.length; renderTableMembers(t2); updateQuickList(); }
+    }
+  }));
+}
+
+$('#ms-search').addEventListener('input', (e) => renderSeatPickList(e.target.value));
+$('#ms-clear').addEventListener('click', async () => {
+  const t = state.tables.find(x => x.id === _seatPick.tableId);
+  if (!t) return;
+  const occ = computeSeating(t).guestAt[_seatPick.seat - 1];
+  if (occ) await api.assignGuest(occ.id, null);   // out of the table
+  closeModal('#modal-seat');
+  await refresh();
+  if (!$('#modal-table').classList.contains('hidden')) {
+    const t2 = state.tables.find(x => x.id === state.currentTableId);
+    if (t2) { $('#mt-count').textContent = t2.guests.length; renderTableMembers(t2); updateQuickList(); }
+  }
 });
 
 // ============ NEW GUEST / NEW TABLE ============
@@ -1769,15 +1935,16 @@ async function autoArrangeTables() {
   const sorted = [...state.tables].sort((a, b) => a.id - b.id);
 
   for (const t of sorted) {
-    const { w, h } = tableDim(t);
-    const fullH = h + nameGap;
-    if (x > pad && x + w > maxW) {
+    const b = tableBox(t);
+    const fullH = b.S + nameGap;
+    if (x > pad && x + b.S > maxW) {
       x = pad;
       y += rowH + pad;
       rowH = 0;
     }
-    updates.push({ id: t.id, position_x: x, position_y: y });
-    x += w + pad;
+    // pack the node box at (x,y); store position as the table origin inside it
+    updates.push({ id: t.id, position_x: Math.round(x + b.offX), position_y: Math.round(y + b.offY), _boxX: x, _boxY: y });
+    x += b.S + pad;
     if (fullH > rowH) rowH = fullH;
   }
 
@@ -1785,8 +1952,8 @@ async function autoArrangeTables() {
     const node = document.querySelector(`.table-node[data-table-id="${u.id}"]`);
     if (node) {
       node.classList.add('rearrange');
-      node.style.left = u.position_x + 'px';
-      node.style.top = u.position_y + 'px';
+      node.style.left = u._boxX + 'px';
+      node.style.top = u._boxY + 'px';
       setTimeout(() => node.classList.remove('rearrange'), 700);
     }
     const t = state.tables.find(x => x.id === u.id);
@@ -1975,27 +2142,25 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ============ PRINT / PDF ============
-// Seat number for a guest = its position in the table's guest list (+1),
-// matching how renderCanvas fills seats[i] = guests[i].
+// Seat number for a guest, honouring pinned seats (same resolver as the canvas).
 function guestSeatInfo(guestId) {
   const g = state.guests.find(x => x.id === guestId);
   if (!g || !g.table_id) return null;
   const t = state.tables.find(x => x.id === g.table_id);
   if (!t) return null;
-  const idx = t.guests.findIndex(x => x.id === guestId);
-  if (idx < 0) return null;
-  return { table: t, seat: idx + 1 };
+  const seat = computeSeating(t).seatOf.get(guestId);
+  if (!seat) return null;
+  return { table: t, seat };
 }
 
 function tableSVG(t) {
-  const geo = tableGeometry(t);
+  const { geo, seatCount, guestAt } = computeSeating(t);
   const count = t.guests.length;
   const baseCap = geo.capacity;
   const px = t.position_x, py = t.position_y;
   const rot = Number(t.rotation) || 0;
   const cx = px + geo.w / 2, cy = py + geo.h / 2;
   const cxr = geo.w / 2, cyr = geo.h / 2;
-  const seatCount = Math.max(geo.seats.length, count, baseCap);
 
   let fill = '#ffffff', stroke = '#c9c4b6', ink = '#23211d', seatFill = '#23211d';
   if (t.color) {
@@ -2016,7 +2181,7 @@ function tableSVG(t) {
   for (let i = 0; i < seatCount; i++) {
     const s = geo.seats[i] || geo.seats[geo.seats.length - 1] || { x: cxr, y: geo.h + SEAT_OFF, n: i + 1 };
     const ax = px + s.x, ay = py + s.y;
-    const occ = i < count;
+    const occ = guestAt[i] != null;
     seatsEl += `<circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="5.5" fill="${occ ? seatFill : '#ffffff'}" stroke="${occ ? seatFill : stroke}" stroke-width="1.5"/>`;
     const dx = s.x - cxr, dy = s.y - cyr, len = Math.hypot(dx, dy) || 1;
     const nx = px + s.x + (dx / len) * 15, ny = py + s.y + (dy / len) * 15;

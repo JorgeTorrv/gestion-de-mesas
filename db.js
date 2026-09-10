@@ -73,6 +73,7 @@ function normalizeGuest(row) {
     email: row.email || null,
     extra_info: row.extra_info || null,
     table_id: row.table_id != null ? Number(row.table_id) : null,
+    seat: row.seat != null && Number.isFinite(Number(row.seat)) ? Number(row.seat) : null,
     parent_id: row.parent_id != null ? Number(row.parent_id) : null,
     is_plus_one: row.is_plus_one ? 1 : 0,
     confirmed: row.confirmed ? 1 : 0,
@@ -140,6 +141,7 @@ export async function initSchema() {
     ALTER TABLE mesas_tables ADD COLUMN IF NOT EXISTS rotation    REAL  NOT NULL DEFAULT 0;
     ALTER TABLE mesas_tables ADD COLUMN IF NOT EXISTS color       TEXT;
     ALTER TABLE mesas_tables ADD COLUMN IF NOT EXISTS seat_layout JSONB;
+    ALTER TABLE mesas_guests ADD COLUMN IF NOT EXISTS seat        INTEGER;
   `);
 }
 
@@ -219,7 +221,7 @@ export const queries = {
 
   unassignGuestsFromTable: {
     run: async (id) => {
-      await pool.query('UPDATE mesas_guests SET table_id=NULL WHERE table_id=$1', [Number(id)]);
+      await pool.query('UPDATE mesas_guests SET table_id=NULL, seat=NULL WHERE table_id=$1', [Number(id)]);
     }
   },
 
@@ -260,13 +262,14 @@ export const queries = {
   },
 
   createGuest: {
-    run: async (name, phone, email, extra_info, table_id, parent_id, is_plus_one, confirmed = 0) => {
+    run: async (name, phone, email, extra_info, table_id, parent_id, is_plus_one, confirmed = 0, seat = null) => {
+      const seatVal = Number.isFinite(Number(seat)) && Number(seat) > 0 ? Math.round(Number(seat)) : null;
       const { rows } = await pool.query(
-        `INSERT INTO mesas_guests(name,phone,email,extra_info,table_id,parent_id,is_plus_one,confirmed,created_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        `INSERT INTO mesas_guests(name,phone,email,extra_info,table_id,parent_id,is_plus_one,confirmed,seat,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
         [name, phone || null, email || null, extra_info || null,
          table_id ?? null, parent_id ?? null,
-         is_plus_one ? 1 : 0, confirmed ? 1 : 0, nowISO()]
+         is_plus_one ? 1 : 0, confirmed ? 1 : 0, table_id ? seatVal : null, nowISO()]
       );
       return { lastInsertRowid: rows[0].id };
     }
@@ -282,11 +285,29 @@ export const queries = {
   },
 
   assignGuest: {
-    run: async (table_id, id) => {
+    // seat: number pins the guest to that seat; null clears the pin; undefined keeps it.
+    run: async (table_id, id, seat) => {
+      const tid = table_id ?? null;
+      if (seat === undefined) {
+        // legacy call — moving tables clears any stale pin
+        await pool.query(
+          `UPDATE mesas_guests SET table_id=$1, seat = CASE WHEN $1 IS DISTINCT FROM table_id THEN NULL ELSE seat END WHERE id=$2`,
+          [tid, Number(id)]
+        );
+        return;
+      }
+      const seatVal = tid && Number.isFinite(Number(seat)) && Number(seat) > 0 ? Math.round(Number(seat)) : null;
       await pool.query(
-        `UPDATE mesas_guests SET table_id=$1 WHERE id=$2`,
-        [table_id ?? null, Number(id)]
+        `UPDATE mesas_guests SET table_id=$1, seat=$2 WHERE id=$3`,
+        [tid, seatVal, Number(id)]
       );
+    }
+  },
+
+  setGuestSeat: {
+    run: async (seat, id) => {
+      const seatVal = Number.isFinite(Number(seat)) && Number(seat) > 0 ? Math.round(Number(seat)) : null;
+      await pool.query(`UPDATE mesas_guests SET seat=$1 WHERE id=$2`, [seatVal, Number(id)]);
     }
   },
 
@@ -385,15 +406,17 @@ export const queries = {
       }
 
       for (const g of payload.guests) {
+        const seatVal = g.table_id && Number.isFinite(Number(g.seat)) && Number(g.seat) > 0
+          ? Math.round(Number(g.seat)) : null;
         await client.query(
-          `INSERT INTO mesas_guests(id,name,phone,email,extra_info,table_id,parent_id,is_plus_one,confirmed,created_at)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          `INSERT INTO mesas_guests(id,name,phone,email,extra_info,table_id,parent_id,is_plus_one,confirmed,seat,created_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
           [Number(g.id), String(g.name || ''),
            g.phone || null, g.email || null, g.extra_info || null,
            g.table_id ? Number(g.table_id) : null,
            g.parent_id ? Number(g.parent_id) : null,
            g.is_plus_one ? 1 : 0, g.confirmed ? 1 : 0,
-           g.created_at || nowISO()]
+           seatVal, g.created_at || nowISO()]
         );
       }
 

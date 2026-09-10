@@ -186,13 +186,13 @@ app.post('/api/guests', async (req, res) => {
   try {
     const {
       name, phone = null, email = null, extra_info = null,
-      table_id = null, parent_id = null, is_plus_one = 0, confirmed = 0
+      table_id = null, parent_id = null, is_plus_one = 0, confirmed = 0, seat = null
     } = req.body || {};
     if (!name || !name.trim()) return res.status(400).json({ error: 'Nombre requerido' });
     await pushHistory();
     const info = await queries.createGuest.run(
       name.trim(), phone, email, extra_info, table_id, parent_id,
-      is_plus_one ? 1 : 0, confirmed ? 1 : 0
+      is_plus_one ? 1 : 0, confirmed ? 1 : 0, seat
     );
     res.json(await enrichGuest(await queries.getGuest.get(info.lastInsertRowid)));
     broadcast('state.changed', { originId: origin(req) });
@@ -264,11 +264,30 @@ app.put('/api/guests/:id', async (req, res) => {
 app.patch('/api/guests/:id/assign', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { table_id } = req.body || {};
+    const body = req.body || {};
+    const table_id = body.table_id ?? null;
     const existing = await queries.getGuest.get(id);
     if (!existing) return res.status(404).json({ error: 'Invitado no encontrado' });
     await pushHistory();
-    await queries.assignGuest.run(table_id ?? null, id);
+    // 'seat' present (number or null) -> set/clear the pin; absent -> legacy behaviour
+    if ('seat' in body) {
+      await queries.assignGuest.run(table_id, id, body.seat ?? null);
+    } else {
+      await queries.assignGuest.run(table_id, id);
+    }
+    res.json(await enrichGuest(await queries.getGuest.get(id)));
+    broadcast('state.changed', { originId: origin(req) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/guests/:id/seat', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const existing = await queries.getGuest.get(id);
+    if (!existing) return res.status(404).json({ error: 'Invitado no encontrado' });
+    if (!existing.table_id) return res.status(400).json({ error: 'El invitado no esta en una mesa' });
+    await pushHistory();
+    await queries.setGuestSeat.run(req.body?.seat ?? null, id);
     res.json(await enrichGuest(await queries.getGuest.get(id)));
     broadcast('state.changed', { originId: origin(req) });
   } catch (err) { res.status(500).json({ error: err.message }); }
