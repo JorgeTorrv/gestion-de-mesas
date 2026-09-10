@@ -475,6 +475,9 @@ html[data-theme="dark"] .table-node.selected .table-shape {
   white-space: nowrap;
 }
 .has-color .seat-num { color: var(--tbl-border); }
+/* seats already taken get a stronger number colour */
+.seat-num.is-taken { color: var(--accent); font-weight: 800; }
+.has-color .seat-num.is-taken { color: var(--tbl-ink); }
 .canvas.hide-seat-nums .seat-num { display: none; }
 
 /* Seat hover tooltip */
@@ -593,7 +596,7 @@ html[data-theme="dark"] .table-node.selected .table-shape {
 .layout-total { margin-left: auto; color: var(--text-2); }
 .layout-total strong { color: var(--accent); font-size: 14px; }
 .mini-preview {
-  width: 100%; height: 128px;
+  width: 100%; height: 148px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -601,10 +604,16 @@ html[data-theme="dark"] .table-node.selected .table-shape {
 .mini-preview .mp-table {
   fill: var(--bg-2);
   stroke: var(--border-strong);
-  stroke-width: 1.5;
+  stroke-width: 2;
 }
-.mini-preview .mp-seat { fill: var(--accent); }
-.mini-preview .mp-corner { fill: var(--highlight); }
+.mini-preview .mp-seat {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+  stroke-width: 1.6;
+}
+.mini-preview .mp-seat.mp-taken { fill: var(--accent); stroke: var(--accent); }
+.mini-preview .mp-num { fill: var(--muted); font-weight: 700; font-family: inherit; }
+.mini-preview .mp-num.mp-num-taken { fill: var(--accent); }
 
 .field input.is-derived {
   background: var(--bg-2);

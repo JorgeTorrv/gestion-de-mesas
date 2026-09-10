@@ -1,5 +1,5 @@
-const CACHE = 'seatmap-v6';
-const ASSET_VER = '6';
+const CACHE = 'seatmap-v7';
+const ASSET_VER = '7';
 const SHELL = [
   './index.html',
   './styles.css?v=' + ASSET_VER,

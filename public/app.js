@@ -687,7 +687,7 @@ function renderCanvas() {
       rotor.appendChild(dot);
 
       const num = document.createElement('div');
-      num.className = 'seat-num';
+      num.className = 'seat-num' + (who ? ' is-taken' : '');
       num.textContent = seatNum;
       const dx = s.x - cxr, dy = s.y - cyr;
       const len = Math.hypot(dx, dy) || 1;
@@ -1421,36 +1421,55 @@ function readRot(prefix) {
   return ((n % 360) + 360) % 360;
 }
 
-function drawLayoutPreview(prefix, L) {
+// Live preview — uses the SAME geometry as the canvas, shows seat numbers,
+// follows the table rotation, and tints seats/numbers that are already taken.
+function drawLayoutPreview(prefix) {
   const svg = $(`#${prefix}-lay-preview`);
   if (!svg) return;
-  const W = 220, m = 30;
-  const bx = m, by = m, bw = W - m * 2, bh = 150 - m * 2;
-  const dots = [];
-  const edge = (n, x1, y1, x2, y2, drop = 0) => {
-    for (let k = 0; k < n - drop; k++) {
-      const f = (k + 1) / (n + 1);
-      dots.push([x1 + (x2 - x1) * f, y1 + (y2 - y1) * f]);
+  const L = currentLayout(prefix);
+  const rot = readRot(prefix);
+
+  let occ = new Set();
+  let count = 0;
+  if (prefix === 'mt' && state.currentTableId != null) {
+    const t = state.tables.find(x => x.id === state.currentTableId);
+    if (t) {
+      count = t.guests.length;
+      for (const n of computeSeating(t).seatOf.values()) occ.add(n);
     }
-  };
-  edge(L.side, bx, by - 13, bx + bw, by - 13);
-  edge(L.side, bx, by + bh + 13, bx + bw, by + bh + 13, L.drop);
-  edge(L.head, bx - 13, by, bx - 13, by + bh);
-  edge(L.head, bx + bw + 13, by, bx + bw + 13, by + bh);
-  let extra = '';
-  if (L.corners) {
-    [[bx - 13, by - 13], [bx + bw + 13, by - 13], [bx + bw + 13, by + bh + 13], [bx - 13, by + bh + 13]]
-      .forEach(([x, y]) => { extra += `<circle cx="${x}" cy="${y}" r="3.6" class="mp-seat mp-corner"/>`; });
   }
+
+  const { w, h, seats } = rectGeometry(count, L);
+  const cx = w / 2, cy = h / 2;
+  const rad = rot * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+  const rotate = (px, py) => [
+    cx + (px - cx) * cos - (py - cy) * sin,
+    cy + (px - cx) * sin + (py - cy) * cos
+  ];
+
+  const PAD = SEAT_OFF + 22;
+  const half = Math.hypot(w / 2 + PAD, h / 2 + PAD);
+  svg.setAttribute('viewBox', `${(cx - half).toFixed(1)} ${(cy - half).toFixed(1)} ${(2 * half).toFixed(1)} ${(2 * half).toFixed(1)}`);
+  const r = Math.max(4.5, half * 0.032);
+  const fs = Math.max(7, half * 0.05);
+
+  let dots = '', labels = '';
+  seats.forEach((s) => {
+    const [rx, ry] = rotate(s.x, s.y);
+    const taken = occ.has(s.n);
+    dots += `<circle cx="${rx.toFixed(1)}" cy="${ry.toFixed(1)}" r="${r.toFixed(1)}" class="mp-seat${taken ? ' mp-taken' : ''}"/>`;
+    const dx = s.x - cx, dy = s.y - cy, len = Math.hypot(dx, dy) || 1;
+    const [lx, ly] = rotate(s.x + (dx / len) * (r + fs * 0.9), s.y + (dy / len) * (r + fs * 0.9));
+    labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="${fs.toFixed(1)}" class="mp-num${taken ? ' mp-num-taken' : ''}" text-anchor="middle" dominant-baseline="central">${s.n}</text>`;
+  });
+
   svg.innerHTML =
-    `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="10" class="mp-table"/>` +
-    dots.map(([x, y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.6" class="mp-seat"/>`).join('') +
-    extra;
+    `<g transform="rotate(${rot} ${cx} ${cy})"><rect x="0" y="0" width="${w}" height="${h}" rx="14" class="mp-table"/></g>` +
+    dots + labels;
 }
 function refreshLayoutUI(prefix) {
-  const L = currentLayout(prefix);
-  $(`#${prefix}-lay-total`).textContent = layoutTotal(L);
-  drawLayoutPreview(prefix, L);
+  $(`#${prefix}-lay-total`).textContent = layoutTotal(currentLayout(prefix));
+  drawLayoutPreview(prefix);
 }
 function syncCapacityField(prefix) {
   const shapeEl = document.querySelector(`input[name="${prefix}-shape"]:checked`);
@@ -1526,12 +1545,15 @@ function setColor(prefix, hex) {
   });
 }
 function bindRotRow(prefix) {
-  $(`#${ROT_ID[prefix]}`).closest('.rotate-row').querySelectorAll('.rot-btn').forEach(b => {
+  const input = $(`#${ROT_ID[prefix]}`);
+  input.closest('.rotate-row').querySelectorAll('.rot-btn').forEach(b => {
     b.addEventListener('click', () => {
-      const cur = parseInt($(`#${ROT_ID[prefix]}`).value, 10) || 0;
-      $(`#${ROT_ID[prefix]}`).value = (cur + Number(b.dataset.rot) + 360) % 360;
+      const cur = parseInt(input.value, 10) || 0;
+      input.value = (cur + Number(b.dataset.rot) + 360) % 360;
+      drawLayoutPreview(prefix);
     });
   });
+  input.addEventListener('input', () => drawLayoutPreview(prefix));
 }
 function initTableEditors() {
   ['mt', 'nt'].forEach(p => {
@@ -2202,7 +2224,7 @@ function tableSVG(t) {
     seatsEl += `<circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="5.5" fill="${occ ? seatFill : '#ffffff'}" stroke="${occ ? seatFill : stroke}" stroke-width="1.5"/>`;
     const dx = s.x - cxr, dy = s.y - cyr, len = Math.hypot(dx, dy) || 1;
     const nx = px + s.x + (dx / len) * 15, ny = py + s.y + (dy / len) * 15;
-    seatsEl += `<text x="${nx.toFixed(1)}" y="${ny.toFixed(1)}" font-size="9" fill="#6b6862" text-anchor="middle" dominant-baseline="central" transform="rotate(${-rot} ${nx.toFixed(1)} ${ny.toFixed(1)})">${s.n ?? i + 1}</text>`;
+    seatsEl += `<text x="${nx.toFixed(1)}" y="${ny.toFixed(1)}" font-size="9" font-weight="${occ ? 700 : 400}" fill="${occ ? ink : '#9a968c'}" text-anchor="middle" dominant-baseline="central" transform="rotate(${-rot} ${nx.toFixed(1)} ${ny.toFixed(1)})">${s.n ?? i + 1}</text>`;
   }
 
   const centerEl =
