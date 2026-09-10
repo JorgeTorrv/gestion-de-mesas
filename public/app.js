@@ -44,8 +44,10 @@ function circleGeometry(count, capacity) {
 
 function defaultLayoutFor(capacity) {
   const cap = Math.max(2, Number(capacity) || 10);
-  const side = Math.max(1, Math.round((cap - 2) / 2));
-  return { head: 1, side, corners: false, drop: 0 };
+  const rem = Math.max(0, cap - 2);            // seats after 1 per cabecera
+  const side = Math.ceil(rem / 2);
+  const drop = Math.max(0, Math.min(side, side * 2 - rem)); // keep exact total
+  return { head: 1, side, corners: false, drop };
 }
 
 // Rectangular: head seats per short end (x2), side seats per long edge (x2),
