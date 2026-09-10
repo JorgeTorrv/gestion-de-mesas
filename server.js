@@ -8,7 +8,17 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(join(__dirname, 'public')));
+app.use(express.static(join(__dirname, 'public'), {
+  setHeaders(res, path) {
+    // HTML and the service worker must always revalidate so updates ship fast;
+    // other assets are busted via ?v= query strings.
+    if (path.endsWith('.html') || path.endsWith('sw.js')) {
+      res.setHeader('Cache-Control', 'no-cache');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    }
+  }
+}));
 
 // ============ SSE (real-time sync) ============
 const sseClients = new Set();

@@ -1,8 +1,9 @@
-const CACHE = 'seatmap-v4';
+const CACHE = 'seatmap-v5';
+const ASSET_VER = '5';
 const SHELL = [
   './index.html',
-  './styles.css',
-  './app.js',
+  './styles.css?v=' + ASSET_VER,
+  './app.js?v=' + ASSET_VER,
   './manifest.json',
   './icon.svg',
   './icon-dark.svg'
@@ -10,7 +11,11 @@ const SHELL = [
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      // {cache:'reload'} bypasses the browser HTTP cache so a new SW always
+      // pulls fresh assets even within the max-age window.
+      .then(c => Promise.all(SHELL.map(u => c.add(new Request(u, { cache: 'reload' })))))
+      .then(() => self.skipWaiting())
   );
 });
 
