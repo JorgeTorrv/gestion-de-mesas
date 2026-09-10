@@ -72,13 +72,15 @@ function rectGeometry(count, layout) {
 
   const along = (k, total, length) => (length / (total + 1)) * (k + 1);
   const seats = [];
-  // Numbering: start at the LEFT cabecera (seats 1..head), then run along the
-  // TOP edge to the RIGHT, down the right cabecera, then along the BOTTOM edge.
-  for (let k = 0; k < head; k++)                  seats.push({ x: -SEAT_OFF,           y: along(k, head, h) });       // left head  T->B
+  // Walk the perimeter so that, with the tables rotated +90deg (the usual
+  // orientation here), the numbers read 1,2,3... clockwise starting at the
+  // cabecera shown on top. In table-local terms: left head bottom->top,
+  // top edge left->right, right head bottom->top, bottom edge left->right.
+  for (let k = head - 1; k >= 0; k--)             seats.push({ x: -SEAT_OFF,           y: along(k, head, h) });       // left head  B->T
   if (corners)                                    seats.push({ x: -SEAT_OFF,           y: -SEAT_OFF });              // top-left corner
   for (let k = 0; k < effSide; k++)               seats.push({ x: along(k, effSide, w), y: -SEAT_OFF });             // top        L->R
   if (corners)                                    seats.push({ x: w + SEAT_OFF,        y: -SEAT_OFF });              // top-right corner
-  for (let k = 0; k < head; k++)                  seats.push({ x: w + SEAT_OFF,        y: along(k, head, h) });      // right head T->B
+  for (let k = head - 1; k >= 0; k--)             seats.push({ x: w + SEAT_OFF,        y: along(k, head, h) });      // right head B->T
   if (corners)                                    seats.push({ x: w + SEAT_OFF,        y: h + SEAT_OFF });           // bottom-right corner
   for (let k = 0; k < effSide - drop; k++)        seats.push({ x: along(k, effSide, w), y: h + SEAT_OFF });          // bottom     L->R (drop trims the right end)
   if (corners)                                    seats.push({ x: -SEAT_OFF,           y: h + SEAT_OFF });           // bottom-left corner
@@ -717,10 +719,15 @@ function renderCanvas() {
     nameEl.textContent = t.name;
     nameEl.style.left = '50%';
     nameEl.style.top = (offY + g.h + 12) + 'px';
+    nameEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectTable(t.id);
+      openTableModal(t.id);
+    });
     node.appendChild(nameEl);
 
     canvas.appendChild(node);
-    attachTableInteractions(node, t);
+    attachTableInteractions(rotor, node, t);
     attachRotateHandle(handle, node, t);
   });
 }
@@ -818,10 +825,12 @@ function clearTableSelection() {
   $$('.table-node.selected').forEach(n => n.classList.remove('selected'));
 }
 
-function attachTableInteractions(node, table) {
+function attachTableInteractions(hitEl, node, table) {
   const ox = () => Number(node.dataset.offx) || 0;
   const oy = () => Number(node.dataset.offy) || 0;
-  enableDragOrClick(node, {
+  // Listen on the rotor (its hitbox follows the real, rotated table shape) but
+  // move the whole node so positions stay in node-box space.
+  enableDragOrClick(hitEl, {
     onClick: () => { selectTable(table.id); openTableModal(table.id); },
     moveTarget: node,
     skipOn: '.seat',
@@ -1471,7 +1480,15 @@ function bindLayoutEditor(prefix) {
     });
   });
   $(`#${prefix}-lay-corners`).addEventListener('change', () => {
-    _layoutDrop[prefix] = 0; refreshLayoutUI(prefix); syncCapacityField(prefix);
+    // Toggling corners keeps the head count fixed — the 4 corner seats are
+    // taken from / given back to the laterals so the total stays the same.
+    const f = readLayoutFields(prefix);
+    const prevDrop = _layoutDrop[prefix] || 0;
+    const before = Math.max(2 * f.head + 2, 2 * f.head + 2 * f.side + (f.corners ? 0 : 4) - prevDrop);
+    const solved = solveLayout({ head: f.head, corners: f.corners, total: before });
+    _layoutDrop[prefix] = solved.drop;
+    $(`#${prefix}-lay-side`).value = solved.side;
+    refreshLayoutUI(prefix); syncCapacityField(prefix);
   });
   $(`#${prefix}-lay-apply`).addEventListener('click', () => {
     const total = parseInt($(`#${prefix}-lay-target`).value, 10);

@@ -317,20 +317,26 @@ html[data-theme="dark"] #btn-theme .icon-moon { display: inline; }
 /* Tables on canvas */
 .table-node {
   position: absolute;
-  cursor: pointer;
   user-select: none;
   touch-action: none;
+  /* The node box is oversized so rotated tables never clip. It must NOT catch
+     pointer events — only the real shape / seats / name / handle do. */
+  pointer-events: none;
 }
-.table-node.drag-moving { z-index: 10; cursor: grabbing; }
+.table-node.drag-moving { z-index: 10; }
 .table-node.rotating { z-index: 11; }
 
 /* Rotor: the part that spins (shape + seats). Positioned inside the node's
-   square box; the name label and handle are siblings positioned absolutely. */
+   square box; the name label and handle are siblings positioned absolutely.
+   Its rotated hitbox matches the visible table, so it is the drag/click target. */
 .table-rotor {
   position: absolute;
   transform-origin: 50% 50%;
   will-change: transform;
+  pointer-events: auto;
+  cursor: pointer;
 }
+.table-node.drag-moving .table-rotor { cursor: grabbing; }
 .table-shape {
   position: absolute; inset: 0;
   border-radius: 16px;
@@ -394,6 +400,8 @@ html[data-theme="dark"] .table-node.selected .table-shape {
   box-shadow: var(--shadow);
   color: var(--text);
   white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 /* Rotate handle */
@@ -401,6 +409,7 @@ html[data-theme="dark"] .table-node.selected .table-shape {
   position: absolute;
   top: -34px; left: 50%;
   width: 26px; height: 26px;
+  pointer-events: auto;
   transform: translateX(-50%);
   border-radius: 50%;
   background: var(--surface);
@@ -422,7 +431,9 @@ html[data-theme="dark"] .table-node.selected .table-shape {
 }
 .rotate-handle:hover { background: var(--accent); color: var(--on-accent); }
 .rotate-handle:active { cursor: grabbing; }
-.table-node:hover .rotate-handle,
+/* node is pointer-events:none, so hover is detected on the rotor (its sibling) */
+.table-rotor:hover ~ .rotate-handle,
+.rotate-handle:hover,
 .table-node.selected .rotate-handle,
 .table-node.rotating .rotate-handle { opacity: 1; }
 @media (hover: none) {
